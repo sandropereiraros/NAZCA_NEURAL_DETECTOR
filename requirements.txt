@@ -1,8 +1,9 @@
 streamlit
 pandas
-requests
-numpy
 folium
 streamlit-folium
 fpdf
+requests
+numpy
+aiohttp
 streamlit-autorefresh
