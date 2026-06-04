@@ -1,2 +1,7 @@
 streamlit
 pandas
+requests
+folium
+numpy
+streamlit-folium
+fpdf
