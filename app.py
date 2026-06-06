@@ -527,20 +527,105 @@ def crear_mapa(lat, lon, sismos_tuple, color_nodo):
     return mapa
 
 
-def generar_pdf(estacion, puntaje, estado, b_val, cond, shoa, sismos_cnt, canal, kp):
+def agregar_linea_pdf(pdf, etiqueta, valor):
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(55, 6, sanitizar_texto(str(etiqueta)), border=1)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 6, sanitizar_texto(str(valor)), border=1, ln=True)
+
+
+def generar_pdf(
+    estacion, puntaje, estado, b_val, cond, shoa, sismos_cnt, canal, kp,
+    config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
+    total_sismos_chile, consultado_usgs, consultado_noaa, modo_demo=False,
+):
+    z_cond = round((cond - config["baseline_cond"]) / config["sigma_cond"], 2)
+    delta_cond = round(cond - config["baseline_cond"], 2)
+    delta_presion = round(presion - config["baseline_pres"], 2)
+    calidad = "SIMULACION" if modo_demo else "USGS/NOAA real + telemetria ambiental estimada"
+    interpretacion = (
+        "Vigilancia alta: revisar tendencia local, confirmar con instrumentos y validar por especialista."
+        if puntaje >= 60 else
+        "Condicion estable o de observacion: mantener seguimiento y recalibracion mensual."
+    )
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Courier", "B", 14)
-    pdf.cell(0, 10, "NAZCA CORE MONITOR v8.0", ln=True, align="C")
-    pdf.set_font("Courier", "", 10)
-    for linea in [
-        f"Estacion: {sanitizar_texto(estacion)}",
-        f"Estado: {sanitizar_texto(estado)} | Match: {puntaje:.1f}%",
-        f"b-value: {b_val} | Sismos 14D: {sismos_cnt} | KP NOAA: {kp}",
-        f"EM: {cond} mS/m | SHOA: {shoa} cm | Canal: {sanitizar_texto(canal)}",
-        f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-    ]:
-        pdf.cell(0, 6, linea, ln=True)
+    pdf.set_auto_page_break(auto=True, margin=14)
+
+    if os.path.exists(LOGO_PATH):
+        pdf.image(LOGO_PATH, x=12, y=10, w=28)
+    pdf.set_xy(44, 11)
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 8, "NAZCA NEURAL DETECTOR", ln=True)
+    pdf.set_x(44)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 6, "Informe tecnico preliminar de monitoreo sismico - Core Monitor v8.0", ln=True)
+    pdf.set_x(44)
+    pdf.cell(0, 6, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+    pdf.ln(12)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "1. Resumen ejecutivo", ln=True)
+    agregar_linea_pdf(pdf, "Estacion evaluada", estacion)
+    agregar_linea_pdf(pdf, "Estado del sistema", estado)
+    agregar_linea_pdf(pdf, "Indice de vigilancia", f"{puntaje:.1f}%")
+    agregar_linea_pdf(pdf, "Canal operativo", canal)
+    agregar_linea_pdf(pdf, "Calidad de datos", calidad)
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "", 9)
+    pdf.multi_cell(0, 5, sanitizar_texto(
+        f"Lectura tecnica: {interpretacion} Este reporte no constituye alerta oficial ni prediccion deterministica."
+    ))
+    pdf.ln(3)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "2. Parametros actuales medidos/calculados", ln=True)
+    agregar_linea_pdf(pdf, "Sismos locales 14D", f"{sismos_cnt} eventos en radio {RADIO_ESTACION_KM} km")
+    agregar_linea_pdf(pdf, "Sismos Chile 14D", total_sismos_chile)
+    agregar_linea_pdf(pdf, "b-value local 14D", b_val)
+    agregar_linea_pdf(pdf, "InSAR", f"{insar:.1f}% (estimado)")
+    agregar_linea_pdf(pdf, "Conductividad EM", f"{cond} mS/m")
+    agregar_linea_pdf(pdf, "SHOA", f"{shoa} cm (estimado)")
+    agregar_linea_pdf(pdf, "Presion", f"{presion} hPa")
+    agregar_linea_pdf(pdf, "Termico", termico)
+    agregar_linea_pdf(pdf, "Kp NOAA", kp)
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "3. Comparativa contra parametros normales del sector", ln=True)
+    agregar_linea_pdf(pdf, "EM normal sector", f"{config['baseline_cond']} mS/m")
+    agregar_linea_pdf(pdf, "EM actual vs normal", f"{cond} mS/m | delta {delta_cond:+.2f} | z-score {z_cond:+.2f}")
+    agregar_linea_pdf(pdf, "Presion normal sector", f"{config['baseline_pres']} hPa")
+    agregar_linea_pdf(pdf, "Presion actual vs normal", f"{presion} hPa | delta {delta_presion:+.2f}")
+    agregar_linea_pdf(pdf, "Sigma EM calibracion", config["sigma_cond"])
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "4. Comparativa historica M7+", ln=True)
+    agregar_linea_pdf(pdf, "Patron mas similar", mejor_ev)
+    agregar_linea_pdf(pdf, "Match con patron", f"{mejor_match:.1f}%")
+    agregar_linea_pdf(pdf, "Criterio", "Comparacion heuristica con firmas historicas precargadas")
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "5. Fuentes y trazabilidad", ln=True)
+    agregar_linea_pdf(pdf, "USGS actualizado", consultado_usgs)
+    agregar_linea_pdf(pdf, "NOAA actualizado", consultado_noaa)
+    agregar_linea_pdf(pdf, "Origen EM/telemetria", origen_em)
+    agregar_linea_pdf(pdf, "Modo demo", "Si" if modo_demo else "No")
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "6. Limitacion tecnica", ln=True)
+    pdf.set_font("Arial", "", 9)
+    pdf.multi_cell(0, 5, sanitizar_texto(
+        "NAZCA Core Monitor es un prototipo experimental de apoyo al monitoreo. "
+        "Las variables InSAR, SHOA, EM, presion y termico pueden ser estimadas si no existen sensores reales conectados. "
+        "Toda decision operacional debe ser validada por profesionales competentes y organismos oficiales."
+    ))
+
     out = pdf.output(dest="S")
     return out.encode("latin-1") if isinstance(out, str) else bytes(out)
 
@@ -709,9 +794,19 @@ with tab_vivo:
         )
 
     if st.button("Generar PDF", use_container_width=True):
-        st.session_state["pdf"] = generar_pdf(estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp)
+        st.session_state["pdf"] = generar_pdf(
+            estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp,
+            config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
+            total_sismos_chile, consultado_usgs, consultado_noaa, modo_demo=modo_demo,
+        )
     if st.session_state.get("pdf"):
-        st.download_button("Guardar PDF", st.session_state["pdf"], "Reporte_Nazca.pdf", "application/pdf", use_container_width=True)
+        st.download_button(
+            "Guardar PDF",
+            st.session_state["pdf"],
+            f"Informe_Tecnico_Nazca_{config['id']}.pdf",
+            "application/pdf",
+            use_container_width=True,
+        )
 
 with tab_hist:
     st.markdown("### Referencia y Match vs terremotos M7+ (14D pre-sismo)")
