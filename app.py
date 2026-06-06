@@ -2,6 +2,7 @@ import json
 import os
 import random
 import base64
+import unicodedata
 from datetime import datetime, timedelta
 
 import folium
@@ -237,6 +238,10 @@ def sanitizar_texto(texto):
         "🌐": "",
         "—": "-",
         "–": "-",
+        "―": "-",
+        "−": "-",
+        "‐": "-",
+        "‑": "-",
         "·": "-",
         "≤": "<=",
         "≥": ">=",
@@ -258,7 +263,8 @@ def sanitizar_texto(texto):
     }
     for original, seguro in reemplazos.items():
         texto = texto.replace(original, seguro)
-    return texto.encode("latin-1", errors="ignore").decode("latin-1")
+    texto = unicodedata.normalize("NFKD", texto)
+    return texto.encode("ascii", errors="ignore").decode("ascii")
 
 
 def registrar_en_bitacora(estacion, estado, puntaje, insar, b_val, cond, shoa):
@@ -567,11 +573,16 @@ def agregar_linea_pdf(pdf, etiqueta, valor):
 
 
 def pdf_cell(pdf, w, h, texto, **kwargs):
+    if w == 0:
+        pdf.set_x(pdf.l_margin)
     pdf.cell(w, h, sanitizar_texto(texto), **kwargs)
 
 
 def pdf_multi_cell(pdf, w, h, texto, **kwargs):
-    pdf.multi_cell(w, h, sanitizar_texto(texto), **kwargs)
+    pdf.set_x(pdf.l_margin)
+    ancho = pdf.w - pdf.l_margin - pdf.r_margin if w == 0 else w
+    pdf.multi_cell(ancho, h, sanitizar_texto(texto), **kwargs)
+    pdf.set_x(pdf.l_margin)
 
 
 def generar_pdf(
@@ -584,9 +595,14 @@ def generar_pdf(
     delta_presion = round(presion - config["baseline_pres"], 2)
     calidad = "SIMULACION" if modo_demo else "USGS/NOAA real + telemetria ambiental estimada"
     interpretacion = (
-        "Vigilancia alta: revisar tendencia local, confirmar con instrumentos y validar por especialista."
+        "Condicion de vigilancia alta: se recomienda contrastar la tendencia local con instrumentacion independiente, "
+        "revisar continuidad temporal de los eventos y solicitar validacion profesional antes de cualquier decision operacional."
         if puntaje >= 60 else
-        "Condicion estable o de observacion: mantener seguimiento y recalibracion mensual."
+        "Condicion de observacion: mantener seguimiento, conservar trazabilidad y actualizar la calibracion mensual."
+    )
+    diagnostico_sector = (
+        "La lectura se basa principalmente en actividad sismica local, b-value y desviaciones contra parametros base "
+        "de la estacion seleccionada. Las variables ambientales estimadas no deben usarse como confirmacion instrumental."
     )
 
     pdf = FPDF()
@@ -600,7 +616,7 @@ def generar_pdf(
     pdf_cell(pdf, 0, 8, "NAZCA NEURAL DETECTOR", ln=True)
     pdf.set_x(44)
     pdf.set_font("Arial", "", 9)
-    pdf_cell(pdf, 0, 6, "Informe tecnico preliminar de monitoreo sismico - Core Monitor v8.0", ln=True)
+    pdf_cell(pdf, 0, 6, "Informe tecnico preliminar de condicion sismica local - Core Monitor v8.0", ln=True)
     pdf.set_x(44)
     pdf_cell(pdf, 0, 6, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(12)
@@ -615,9 +631,8 @@ def generar_pdf(
     pdf.ln(4)
 
     pdf.set_font("Arial", "", 9)
-    pdf_multi_cell(pdf, 0, 5,
-        f"Lectura tecnica: {interpretacion} Este reporte no constituye alerta oficial ni prediccion deterministica."
-    )
+    pdf_multi_cell(pdf, 0, 5, f"Lectura tecnica: {interpretacion}")
+    pdf_multi_cell(pdf, 0, 5, diagnostico_sector)
     pdf.ln(3)
 
     pdf.set_font("Arial", "B", 12)
@@ -640,6 +655,7 @@ def generar_pdf(
     agregar_linea_pdf(pdf, "Presion normal sector", f"{config['baseline_pres']} hPa")
     agregar_linea_pdf(pdf, "Presion actual vs normal", f"{presion} hPa | delta {delta_presion:+.2f}")
     agregar_linea_pdf(pdf, "Sigma EM calibracion", config["sigma_cond"])
+    agregar_linea_pdf(pdf, "Criterio local", f"Eventos considerados dentro de {RADIO_ESTACION_KM} km de la estacion")
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
@@ -658,7 +674,16 @@ def generar_pdf(
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
-    pdf_cell(pdf, 0, 8, "6. Limitacion tecnica", ln=True)
+    pdf_cell(pdf, 0, 8, "6. Recomendacion operacional preliminar", ln=True)
+    pdf.set_font("Arial", "", 9)
+    pdf_multi_cell(pdf, 0, 5,
+        f"{interpretacion} Mantener registro del informe, revisar la bitacora historica y no escalar el resultado "
+        "sin corroboracion de sensores reales o criterio profesional."
+    )
+    pdf.ln(3)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf_cell(pdf, 0, 8, "7. Limitacion tecnica", ln=True)
     pdf.set_font("Arial", "", 9)
     pdf_multi_cell(pdf, 0, 5,
         "NAZCA Core Monitor es un prototipo experimental de apoyo al monitoreo. "
