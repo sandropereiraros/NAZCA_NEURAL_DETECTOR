@@ -30,6 +30,7 @@ MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
 INTERVALOS_API = {"10 minutos": 600, "30 minutos": 1800, "1 hora": 3600, "Desactivado": 3600}
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nazca_cache")
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nazca_logo.png")
+SUSCRIPTORES_TELEGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_suscriptores_telegram.json")
 CHILE_BOUNDS = {
     "min_lat": -56.0,
     "max_lat": -17.0,
@@ -328,9 +329,9 @@ def telegram_configurado():
     return bool(obtener_secret("TELEGRAM_TOKEN") and obtener_secret("TELEGRAM_CHAT_ID"))
 
 
-def enviar_telegram(mensaje):
+def enviar_telegram(mensaje, chat_id=None):
     token = obtener_secret("TELEGRAM_TOKEN")
-    chat_id = obtener_secret("TELEGRAM_CHAT_ID")
+    chat_id = chat_id or obtener_secret("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False, "Telegram no configurado en secrets."
     try:
@@ -349,6 +350,72 @@ def enviar_telegram(mensaje):
         return False, f"Telegram HTTP {res.status_code}: {res.text[:160]}"
     except requests.RequestException as exc:
         return False, f"Error Telegram: {exc}"
+
+
+def cargar_suscriptores_telegram():
+    if not os.path.exists(SUSCRIPTORES_TELEGRAM):
+        return []
+    try:
+        with open(SUSCRIPTORES_TELEGRAM, "r", encoding="utf-8") as f:
+            datos = json.load(f)
+        return datos if isinstance(datos, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def guardar_suscriptores_telegram(suscriptores):
+    with open(SUSCRIPTORES_TELEGRAM, "w", encoding="utf-8") as f:
+        json.dump(suscriptores, f, ensure_ascii=False, indent=2)
+
+
+def upsert_suscriptor_telegram(nombre, chat_id, estacion, nivel_minimo):
+    nombre = sanitizar_texto(nombre).strip() or "Suscriptor"
+    chat_id = str(chat_id).strip()
+    suscriptores = cargar_suscriptores_telegram()
+    nuevo = {
+        "nombre": nombre,
+        "chat_id": chat_id,
+        "estacion": estacion,
+        "nivel_minimo": nivel_minimo,
+        "activo": True,
+        "registrado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    actualizados = []
+    reemplazado = False
+    for sub in suscriptores:
+        if str(sub.get("chat_id")) == chat_id:
+            actualizados.append({**sub, **nuevo})
+            reemplazado = True
+        else:
+            actualizados.append(sub)
+    if not reemplazado:
+        actualizados.append(nuevo)
+    guardar_suscriptores_telegram(actualizados)
+    return nuevo
+
+
+def nivel_valor(nombre_nivel):
+    orden = {"VERDE": 0, "AMARILLO": 1, "NARANJO": 2, "ROJO": 3}
+    return orden.get(str(nombre_nivel).upper(), 0)
+
+
+def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo):
+    if modo_demo:
+        return "Modo demo: suscriptores no notificados."
+    enviados = 0
+    errores = 0
+    for sub in cargar_suscriptores_telegram():
+        if not sub.get("activo", True):
+            continue
+        estacion_sub = sub.get("estacion", "Todas")
+        if estacion_sub not in ("Todas", estacion_actual):
+            continue
+        if nivel_valor(nivel_alerta["nivel"]) < nivel_valor(sub.get("nivel_minimo", "AMARILLO")):
+            continue
+        ok, _ = enviar_telegram(mensaje, chat_id=sub.get("chat_id"))
+        enviados += 1 if ok else 0
+        errores += 0 if ok else 1
+    return f"Suscriptores notificados: {enviados} | errores: {errores}"
 
 
 def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo):
@@ -978,6 +1045,8 @@ if telegram_activo:
         )
         ok_telegram, telegram_estado = enviar_telegram(mensaje)
         if ok_telegram:
+            estado_suscriptores = enviar_alerta_suscriptores(mensaje, estacion_sel, nivel_alerta, modo_demo)
+            telegram_estado = f"{telegram_estado} {estado_suscriptores}"
             st.session_state[detalle_notificacion] = datetime.now()
     else:
         telegram_estado = detalle_notificacion
@@ -1007,11 +1076,12 @@ if api_nueva:
 else:
     st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
 
-tab_vivo, tab_hist, tab_cal, tab_calidad = st.tabs([
+tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion = st.tabs([
     "ESCANEO EN VIVO",
     "COMPARATIVA M7+",
     "CALIBRACIÓN ESTACIONES",
     "INFORME DE CALIDAD",
+    "SUSCRIPCIÓN TELEGRAM",
 ])
 
 with tab_vivo:
@@ -1189,6 +1259,57 @@ with tab_calidad:
     )
     with st.expander("Ver informe completo"):
         st.text(informe_calidad)
+
+with tab_suscripcion:
+    st.markdown("### Suscripción Telegram experimental")
+    st.info(
+        "Registro privado para pruebas familiares. Las notificaciones son experimentales, no oficiales "
+        "y no representan una predicción determinística."
+    )
+
+    with st.form("form_suscripcion_telegram"):
+        nombre_sub = st.text_input("Nombre", placeholder="Ej: Mamá, Hermano, Sandra")
+        chat_id_sub = st.text_input("Telegram Chat ID", placeholder="Ej: 7321245766")
+        estacion_sub = st.selectbox("Zona / estación de interés", ["Todas"] + list(ESTACIONES_CONFIG.keys()))
+        nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=1)
+        acepta_sub = st.checkbox("Acepto que es una prueba privada experimental y no una alerta oficial.")
+        registrar_sub = st.form_submit_button("Registrar / actualizar suscripción", use_container_width=True)
+
+    if registrar_sub:
+        if not chat_id_sub.strip().isdigit():
+            st.warning("El Chat ID debe contener solo números.")
+        elif not acepta_sub:
+            st.warning("Debes aceptar la condición experimental/no oficial.")
+        else:
+            sub = upsert_suscriptor_telegram(nombre_sub, chat_id_sub, estacion_sub, nivel_sub)
+            st.success(f"Suscripción registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
+
+    suscriptores = cargar_suscriptores_telegram()
+    st.markdown("#### Suscriptores activos")
+    if suscriptores:
+        df_subs = pd.DataFrame([{
+            "Nombre": s.get("nombre"),
+            "Chat ID": str(s.get("chat_id"))[-4:].rjust(len(str(s.get("chat_id"))), "*"),
+            "Estación": s.get("estacion"),
+            "Nivel mínimo": s.get("nivel_minimo"),
+            "Activo": "Sí" if s.get("activo", True) else "No",
+            "Registrado": s.get("registrado"),
+        } for s in suscriptores])
+        st.dataframe(df_subs, use_container_width=True, hide_index=True)
+    else:
+        st.caption("Aún no hay suscriptores registrados.")
+
+    st.markdown("#### Prueba de envío")
+    chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
+    if st.button("Enviar prueba a suscriptor", use_container_width=True):
+        if not chat_prueba.strip().isdigit():
+            st.warning("Ingresa un Chat ID numérico.")
+        else:
+            ok_sub, msg_sub = enviar_telegram(
+                "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
+                chat_id=chat_prueba.strip(),
+            )
+            st.success(msg_sub) if ok_sub else st.warning(msg_sub)
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_seg // 60} min")
 st.sidebar.metric("b-value regional", f"{b_val}")
