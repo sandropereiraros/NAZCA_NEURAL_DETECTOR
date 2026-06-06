@@ -24,6 +24,7 @@ UMBRAL_CRITICO = 75.0
 UMBRAL_NOTIFICACION_TELEGRAM = 70.0
 UMBRAL_MATCH_M7_TELEGRAM = 80.0
 COOLDOWN_TELEGRAM_MIN = 60
+UMBRAL_SIRENA_ROJA = 85.0
 RADIO_ESTACION_KM = 350
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
 INTERVALOS_API = {"10 minutos": 600, "30 minutos": 1800, "1 hora": 3600, "Desactivado": 3600}
@@ -341,13 +342,15 @@ def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo)
 
 def construir_mensaje_telegram(
     estacion, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-    mejor_ev, mejor_match, consultado_usgs,
+    mejor_ev, mejor_match, consultado_usgs, nivel_alerta, ventana_vigilancia,
 ):
     return (
         "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
         "No es alerta oficial ni prediccion deterministica.\n\n"
         f"Estacion: {estacion}\n"
         f"Estado interno: {estado}\n"
+        f"Nivel de alerta: {nivel_alerta}\n"
+        f"Ventana vigilancia: {ventana_vigilancia}\n"
         f"Indice vigilancia: {puntaje:.1f}%\n"
         f"Patron M7+ similar: {mejor_ev} ({mejor_match:.1f}%)\n"
         f"Sismos locales 14D: {total_sismos}\n"
@@ -356,6 +359,68 @@ def construir_mensaje_telegram(
         f"EM: {cond} mS/m | SHOA: {shoa} cm\n"
         f"USGS: {consultado_usgs}\n\n"
         "Accion sugerida: revisar tendencia, generar PDF tecnico y validar con especialista."
+    )
+
+
+def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos):
+    if puntaje >= UMBRAL_SIRENA_ROJA and mejor_match >= UMBRAL_MATCH_M7_TELEGRAM and b_val <= 0.70:
+        return {
+            "nivel": "ROJO",
+            "color": "🔴",
+            "ventana": "6 a 24 horas",
+            "mensaje": "Vigilancia maxima experimental. Requiere revision tecnica inmediata.",
+            "sirena": True,
+        }
+    if puntaje >= UMBRAL_NOTIFICACION_TELEGRAM and mejor_match >= UMBRAL_MATCH_M7_TELEGRAM:
+        return {
+            "nivel": "NARANJO",
+            "color": "🟠",
+            "ventana": "12 a 24 horas",
+            "mensaje": "Vigilancia alta experimental. Validar tendencia y fuentes externas.",
+            "sirena": False,
+        }
+    if puntaje >= 55 or mejor_match >= 65 or total_sismos >= 12:
+        return {
+            "nivel": "AMARILLO",
+            "color": "🟡",
+            "ventana": "24 a 36 horas",
+            "mensaje": "Observacion reforzada. Podrian presentarse cambios positivos o negativos en umbrales.",
+            "sirena": False,
+        }
+    return {
+        "nivel": "VERDE",
+        "color": "🟢",
+        "ventana": "Sin ventana critica",
+        "mensaje": "Condicion estable dentro del modelo experimental.",
+        "sirena": False,
+    }
+
+
+def render_sirena_alerta():
+    components.html(
+        """
+        <script>
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        function beep(freq, start, duration) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.frequency.value = freq;
+            osc.type = "sine";
+            gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+            gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + start + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(ctx.currentTime + start);
+            osc.stop(ctx.currentTime + start + duration);
+        }
+        for (let i = 0; i < 3; i++) {
+            beep(740, i * 0.7, 0.42);
+            beep(420, i * 0.7 + 0.35, 0.35);
+        }
+        </script>
+        """,
+        height=0,
     )
 
 
@@ -662,8 +727,9 @@ def pdf_multi_cell(pdf, w, h, texto, **kwargs):
 def generar_pdf(
     estacion, puntaje, estado, b_val, cond, shoa, sismos_cnt, canal, kp,
     config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
-    total_sismos_chile, consultado_usgs, consultado_noaa, modo_demo=False,
+    total_sismos_chile, consultado_usgs, consultado_noaa, nivel_alerta=None, modo_demo=False,
 ):
+    nivel_alerta = nivel_alerta or {"nivel": "NO CALCULADO", "ventana": "No disponible", "mensaje": "No disponible"}
     z_cond = round((cond - config["baseline_cond"]) / config["sigma_cond"], 2)
     delta_cond = round(cond - config["baseline_cond"], 2)
     delta_presion = round(presion - config["baseline_pres"], 2)
@@ -699,6 +765,8 @@ def generar_pdf(
     pdf_cell(pdf, 0, 8, "1. Resumen ejecutivo", ln=True)
     agregar_linea_pdf(pdf, "Estacion evaluada", estacion)
     agregar_linea_pdf(pdf, "Estado del sistema", estado)
+    agregar_linea_pdf(pdf, "Nivel de alerta", nivel_alerta["nivel"])
+    agregar_linea_pdf(pdf, "Ventana vigilancia", nivel_alerta["ventana"])
     agregar_linea_pdf(pdf, "Indice de vigilancia", f"{puntaje:.1f}%")
     agregar_linea_pdf(pdf, "Canal operativo", canal)
     agregar_linea_pdf(pdf, "Calidad de datos", calidad)
@@ -707,6 +775,7 @@ def generar_pdf(
     pdf.set_font("Arial", "", 9)
     pdf_multi_cell(pdf, 0, 5, f"Lectura tecnica: {interpretacion}")
     pdf_multi_cell(pdf, 0, 5, diagnostico_sector)
+    pdf_multi_cell(pdf, 0, 5, f"Nivel temporal experimental: {nivel_alerta['mensaje']}")
     pdf.ln(3)
 
     pdf.set_font("Arial", "B", 12)
@@ -798,6 +867,7 @@ st.sidebar.markdown("---")
 modo_demo = st.sidebar.checkbox("Simulación Catastrófica", value=False)
 modo_sat = st.sidebar.toggle("Colapso red terrestre (satelital)", value=False)
 canal = "SATELITAL LEO" if modo_sat else "TERRESTRE"
+sirena_activa = st.sidebar.toggle("Sirena local en alerta roja", value=True)
 
 st.sidebar.markdown("---")
 telegram_activo = st.sidebar.toggle("Telegram vigilancia M7+", value=False)
@@ -865,6 +935,7 @@ df_match, mejor_ev, mejor_match = comparar_con_historico(insar, total_sismos, b_
 df_calibracion = construir_calibracion_estaciones(
     df_sismos, kp, ttl_seg, modo_sat, consultado_usgs, consultado_noaa
 )
+nivel_alerta = clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos)
 
 telegram_estado = "Telegram desactivado."
 if telegram_activo:
@@ -875,6 +946,7 @@ if telegram_activo:
         mensaje = construir_mensaje_telegram(
             estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
             mejor_ev, mejor_match, consultado_usgs,
+            f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
         )
         ok_telegram, telegram_estado = enviar_telegram(mensaje)
         if ok_telegram:
@@ -924,6 +996,29 @@ with tab_vivo:
     else:
         st.success("Estable")
 
+    if nivel_alerta["nivel"] == "ROJO":
+        st.error(
+            f"{nivel_alerta['color']} ALERTA ROJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
+            f"{nivel_alerta['mensaje']}"
+        )
+        if sirena_activa:
+            clave_sirena = f"sirena_{estacion_sel}_{round(puntaje, 1)}_{mejor_ev}"
+            if st.session_state.get("ultima_sirena") != clave_sirena:
+                render_sirena_alerta()
+                st.session_state["ultima_sirena"] = clave_sirena
+    elif nivel_alerta["nivel"] == "NARANJO":
+        st.warning(
+            f"{nivel_alerta['color']} ALERTA NARANJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
+            f"{nivel_alerta['mensaje']}"
+        )
+    elif nivel_alerta["nivel"] == "AMARILLO":
+        st.warning(
+            f"{nivel_alerta['color']} ALERTA AMARILLA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
+            f"{nivel_alerta['mensaje']}"
+        )
+    else:
+        st.info(f"{nivel_alerta['color']} Nivel verde: {nivel_alerta['mensaje']}")
+
     st.caption(log_filtro)
     if nodo_offline:
         st.warning("Nodo offline — telemetría por interpolación de vecindad.")
@@ -944,8 +1039,12 @@ with tab_vivo:
 
     c6, c7, c8 = st.columns(3)
     c6.metric("Patrón M7+", f"{mejor_match:.1f}%")
-    c7.metric("EM (Z-score)", f"{cond} mS/m")
-    c8.metric("SHOA", f"{shoa} cm")
+    c7.metric("Nivel alerta", f"{nivel_alerta['color']} {nivel_alerta['nivel']}")
+    c8.metric("Ventana vigilancia", nivel_alerta["ventana"])
+
+    c9, c10 = st.columns(2)
+    c9.metric("EM (Z-score)", f"{cond} mS/m")
+    c10.metric("SHOA", f"{shoa} cm")
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
@@ -967,7 +1066,7 @@ with tab_vivo:
         st.session_state["pdf"] = generar_pdf(
             estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp,
             config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
-            total_sismos_chile, consultado_usgs, consultado_noaa, modo_demo=modo_demo,
+            total_sismos_chile, consultado_usgs, consultado_noaa, nivel_alerta=nivel_alerta, modo_demo=modo_demo,
         )
     if st.session_state.get("pdf"):
         st.download_button(
