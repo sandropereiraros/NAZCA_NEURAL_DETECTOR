@@ -267,6 +267,24 @@ def filtrar_sismos_estacion(df_sismos, lat, lon, radio_km=RADIO_ESTACION_KM):
     return df[df["Distancia_km"] <= radio_km].sort_values("Fecha", ascending=False)
 
 
+def generar_sismos_demo(config, cantidad=85):
+    rng = random.Random(f"demo_{config['lat']}_{config['lon']}")
+    ahora = datetime.now()
+    filas = []
+    for i in range(cantidad):
+        mag = round(rng.uniform(3.4, 6.8), 1)
+        if i < 6:
+            mag = round(rng.uniform(5.8, 7.4), 1)
+        filas.append({
+            "Magnitud": mag,
+            "Lugar": "SIMULACIÓN CATASTRÓFICA - enjambre local",
+            "Latitud": config["lat"] + rng.uniform(-1.4, 1.4),
+            "Longitud": config["lon"] + rng.uniform(-1.4, 1.4),
+            "Fecha": (ahora - timedelta(hours=rng.uniform(0, 14 * 24))).strftime("%Y-%m-%d %H:%M"),
+        })
+    return pd.DataFrame(filas).sort_values("Fecha", ascending=False)
+
+
 def telemetria_estable(estacion, config, total_sismos, ttl_seg, modo_sat, nodo_offline):
     bloque, _ = bucket_telemetria(estacion, ttl_seg)
     rng = random.Random(hash((estacion, bloque, modo_sat, nodo_offline)))
@@ -574,8 +592,11 @@ api_nueva = False
 consultado_usgs = consultado_noaa = "—"
 
 if modo_demo:
-    total_sismos, b_val, kp = 85, 0.55, 1
-    total_sismos_chile = total_sismos
+    df_sismos = generar_sismos_demo(config)
+    df_sismos_local = filtrar_sismos_estacion(df_sismos, config["lat"], config["lon"])
+    total_sismos_chile = len(df_sismos)
+    total_sismos = len(df_sismos_local)
+    b_val, kp = 0.55, 1
     shoa, cond, presion, termico, insar, origen_em = 14.2, 8.4, 1013.0, 2.1, 94.0, "DEMO"
     nodo_offline = False
     bloque = "demo"
@@ -644,6 +665,8 @@ tab_vivo, tab_hist, tab_cal, tab_calidad = st.tabs([
 ])
 
 with tab_vivo:
+    if modo_demo:
+        st.error("MODO SIMULACIÓN CATASTRÓFICA ACTIVO - datos ficticios para prueba de respuesta.")
     if puntaje >= 90:
         st.error(f"CRÍTICO — Match {puntaje:.1f}%")
     elif puntaje >= UMBRAL_CRITICO:
