@@ -1,10 +1,14 @@
 .nazca_cache/
 __pycache__/
 *.pyc
+*.py[cod]
 *.log
 .env
 .env.*
 !.env.example
+.venv/
+env/
+venv/
 *.db
 *.sqlite
 *.sqlite3
