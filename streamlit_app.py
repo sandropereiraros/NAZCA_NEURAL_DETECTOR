@@ -48,31 +48,59 @@ st.markdown(
     }
     .nazca-header {
         display: flex;
-        justify-content: center;
+        justify-content: flex-start;
         align-items: center;
-        gap: 18px;
-        padding: 18px 10px 8px 10px;
+        gap: 34px;
+        padding: 34px 42px 30px 42px;
+        margin: 4px 0 20px 0;
+        border: 1px solid rgba(88, 166, 255, .28);
+        border-radius: 24px;
+        background:
+            radial-gradient(circle at 12% 45%, rgba(0,245,255,.22), transparent 22%),
+            linear-gradient(135deg, #07111d 0%, #0d1117 45%, #061827 100%);
+        box-shadow: 0 0 38px rgba(88, 166, 255, .12);
     }
     .nazca-logo {
-        width: 96px;
-        height: 96px;
+        width: 156px;
+        height: 156px;
         object-fit: contain;
-        filter: drop-shadow(0 0 18px rgba(88, 166, 255, .28));
+        filter: drop-shadow(0 0 28px rgba(0, 245, 255, .34));
     }
     .nazca-title {
         font-family: 'Courier New', monospace;
-        line-height: 1.05;
+        line-height: 1.08;
     }
     .nazca-title h1 {
         color: #58a6ff;
         margin: 0;
-        letter-spacing: 1px;
-        font-size: 2.25rem;
+        letter-spacing: 4px;
+        font-size: 3.25rem;
+        text-shadow: 0 0 18px rgba(88, 166, 255, .26);
     }
     .nazca-title span {
+        display: block;
+        color: #c9d1d9;
+        font-size: 1.05rem;
+        letter-spacing: 3.5px;
+        margin-top: 12px;
+    }
+    .nazca-title p {
         color: #8b949e;
-        font-size: .92rem;
-        letter-spacing: 2.5px;
+        margin: 16px 0 0 0;
+        max-width: 780px;
+        font-size: 1.02rem;
+        letter-spacing: .5px;
+    }
+    .nazca-badge {
+        display: inline-block;
+        margin-top: 14px;
+        padding: 7px 12px;
+        border: 1px solid rgba(0,245,255,.45);
+        border-radius: 999px;
+        color: #00f5ff;
+        background: rgba(0,245,255,.07);
+        font-size: .82rem;
+        letter-spacing: 1.8px;
     }
     h1, h2, h3 { font-family: 'Courier New', monospace !important; }
     </style>
@@ -964,7 +992,9 @@ st.markdown(
         <img class="nazca-logo" src="data:image/png;base64,{logo_base64}" alt="Logo NAZCA" />
         <div class="nazca-title">
             <h1>NAZCA NEURAL DETECTOR</h1>
-            <span>CORE MONITOR v8.0 · PROTOTIPO EXPERIMENTAL</span>
+            <span>CORE MONITOR v8.0 · VIGILANCIA SISMICA EXPERIMENTAL</span>
+            <p>Monitoreo inteligente de señales sismicas, patrones M7+ y telemetria regional para apoyar decisiones tempranas con trazabilidad tecnica.</p>
+            <div class="nazca-badge">PRIVATE TEST NETWORK · CHILE SEISMIC WATCH</div>
         </div>
     </div>
     """,
