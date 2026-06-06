@@ -103,6 +103,24 @@ st.markdown(
         font-size: .82rem;
         letter-spacing: 1.8px;
     }
+    .nazca-credit {
+        display: block;
+        margin-top: 10px;
+        color: #58a6ff;
+        font-size: .84rem;
+        letter-spacing: 1.4px;
+        opacity: .92;
+    }
+    .nazca-footer {
+        margin-top: 32px;
+        padding: 18px;
+        text-align: center;
+        border-top: 1px solid rgba(88,166,255,.22);
+        color: #8b949e;
+        font-family: 'Courier New', monospace;
+        font-size: .86rem;
+        letter-spacing: 1px;
+    }
     h1, h2, h3 { font-family: 'Courier New', monospace !important; }
     </style>
     """,
@@ -724,6 +742,7 @@ def generar_informe_calidad_texto(df_calibracion, consultado_usgs, consultado_no
     )
     return f"""INFORME DE CALIDAD Y TRANSPARENCIA - NAZCA CORE MONITOR
 Generado: {fecha}
+Desarrollado por: Sandro Pereira A. - CEO & Developer
 
 1. Objetivo
 Este informe documenta los parámetros usados por el sistema para entregar una lectura transparente,
@@ -854,6 +873,8 @@ def generar_pdf(
     pdf_cell(pdf, 0, 6, "Informe tecnico preliminar de condicion sismica local - Core Monitor v8.0", ln=True)
     pdf.set_x(44)
     pdf_cell(pdf, 0, 6, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+    pdf.set_x(44)
+    pdf_cell(pdf, 0, 6, "Desarrollado por Sandro Pereira A. - CEO & Developer", ln=True)
     pdf.ln(12)
 
     pdf.set_font("Arial", "B", 12)
@@ -1064,6 +1085,7 @@ st.markdown(
             <span>CORE MONITOR v8.0 · VIGILANCIA SISMICA EXPERIMENTAL</span>
             <p>Monitoreo inteligente de señales sismicas, patrones M7+ y telemetria regional para apoyar decisiones tempranas con trazabilidad tecnica.</p>
             <div class="nazca-badge">PRIVATE TEST NETWORK · CHILE SEISMIC WATCH</div>
+            <span class="nazca-credit">Desarrollado por Sandro Pereira A. · CEO & Developer</span>
         </div>
     </div>
     """,
@@ -1313,6 +1335,15 @@ with tab_suscripcion:
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_seg // 60} min")
 st.sidebar.metric("b-value regional", f"{b_val}")
+
+st.markdown(
+    """
+    <div class="nazca-footer">
+        NAZCA Neural Detector · Desarrollado por Sandro Pereira A. · CEO & Developer · Proyecto experimental privado
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if intervalo != "Desactivado":
     components.html(
