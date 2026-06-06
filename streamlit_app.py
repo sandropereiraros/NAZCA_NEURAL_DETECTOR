@@ -39,6 +39,41 @@ st.markdown(
         border: 1px solid #30363d; border-radius: 12px;
         padding: 20px; margin-bottom: 10px;
     }
+    .nazca-header {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 18px;
+        padding: 18px 10px 8px 10px;
+    }
+    .nazca-logo {
+        width: 82px;
+        height: 82px;
+        border-radius: 24px;
+        background:
+            radial-gradient(circle at 50% 50%, rgba(88,166,255,.28), transparent 35%),
+            linear-gradient(145deg, #0d1117, #161b22);
+        border: 1px solid #58a6ff;
+        box-shadow: 0 0 28px rgba(88, 166, 255, .22);
+        display: grid;
+        place-items: center;
+    }
+    .nazca-logo svg { width: 62px; height: 62px; }
+    .nazca-title {
+        font-family: 'Courier New', monospace;
+        line-height: 1.05;
+    }
+    .nazca-title h1 {
+        color: #58a6ff;
+        margin: 0;
+        letter-spacing: 1px;
+        font-size: 2.25rem;
+    }
+    .nazca-title span {
+        color: #8b949e;
+        font-size: .92rem;
+        letter-spacing: 2.5px;
+    }
     h1, h2, h3 { font-family: 'Courier New', monospace !important; }
     </style>
     """,
@@ -578,7 +613,26 @@ df_calibracion = construir_calibracion_estaciones(
 # ==============================================================================
 # INTERFAZ
 # ==============================================================================
-st.markdown('<h1 style="text-align:center;color:#58a6ff;">NAZCA-NEURAL DETECTOR v8.0</h1>', unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class="nazca-header">
+        <div class="nazca-logo">
+            <svg viewBox="0 0 100 100" role="img" aria-label="Logo NAZCA">
+                <circle cx="50" cy="50" r="38" fill="none" stroke="#58a6ff" stroke-width="3" opacity=".95"/>
+                <path d="M18 64 C32 40, 43 75, 56 45 S78 36, 84 20" fill="none" stroke="#00f5ff" stroke-width="5" stroke-linecap="round"/>
+                <path d="M24 76 L39 55 L50 69 L65 36 L78 48" fill="none" stroke="#ff003c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="50" cy="50" r="7" fill="#facc15"/>
+                <path d="M50 13 V26 M50 74 V87 M13 50 H26 M74 50 H87" stroke="#8b949e" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+        </div>
+        <div class="nazca-title">
+            <h1>NAZCA NEURAL DETECTOR</h1>
+            <span>CORE MONITOR v8.0 · PROTOTIPO EXPERIMENTAL</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 st.caption(f"Enlace: **{canal}** | Caché APIs: **{intervalo}**")
 
 if api_nueva:
