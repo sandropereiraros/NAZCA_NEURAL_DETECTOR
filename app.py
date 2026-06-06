@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import base64
 from datetime import datetime, timedelta
 
 import folium
@@ -23,6 +24,7 @@ RADIO_ESTACION_KM = 350
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
 INTERVALOS_API = {"10 minutos": 600, "30 minutos": 1800, "1 hora": 3600, "Desactivado": 3600}
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nazca_cache")
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nazca_logo.png")
 CHILE_BOUNDS = {
     "min_lat": -56.0,
     "max_lat": -17.0,
@@ -47,18 +49,11 @@ st.markdown(
         padding: 18px 10px 8px 10px;
     }
     .nazca-logo {
-        width: 82px;
-        height: 82px;
-        border-radius: 24px;
-        background:
-            radial-gradient(circle at 50% 50%, rgba(88,166,255,.28), transparent 35%),
-            linear-gradient(145deg, #0d1117, #161b22);
-        border: 1px solid #58a6ff;
-        box-shadow: 0 0 28px rgba(88, 166, 255, .22);
-        display: grid;
-        place-items: center;
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        filter: drop-shadow(0 0 18px rgba(88, 166, 255, .28));
     }
-    .nazca-logo svg { width: 62px; height: 62px; }
     .nazca-title {
         font-family: 'Courier New', monospace;
         line-height: 1.05;
@@ -79,6 +74,14 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def cargar_logo_base64():
+    try:
+        with open(LOGO_PATH, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except OSError:
+        return ""
 
 ESTACIONES_CONFIG = {
     "Arica / Iquique (85400)": {"id": "85400", "baseline_cond": 3.9, "sigma_cond": 0.2, "baseline_pres": 1012.1, "lat": -18.47, "lon": -70.31},
@@ -613,18 +616,11 @@ df_calibracion = construir_calibracion_estaciones(
 # ==============================================================================
 # INTERFAZ
 # ==============================================================================
+logo_base64 = cargar_logo_base64()
 st.markdown(
-    """
+    f"""
     <div class="nazca-header">
-        <div class="nazca-logo">
-            <svg viewBox="0 0 100 100" role="img" aria-label="Logo NAZCA">
-                <circle cx="50" cy="50" r="38" fill="none" stroke="#58a6ff" stroke-width="3" opacity=".95"/>
-                <path d="M18 64 C32 40, 43 75, 56 45 S78 36, 84 20" fill="none" stroke="#00f5ff" stroke-width="5" stroke-linecap="round"/>
-                <path d="M24 76 L39 55 L50 69 L65 36 L78 48" fill="none" stroke="#ff003c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-                <circle cx="50" cy="50" r="7" fill="#facc15"/>
-                <path d="M50 13 V26 M50 74 V87 M13 50 H26 M74 50 H87" stroke="#8b949e" stroke-width="3" stroke-linecap="round"/>
-            </svg>
-        </div>
+        <img class="nazca-logo" src="data:image/png;base64,{logo_base64}" alt="Logo NAZCA" />
         <div class="nazca-title">
             <h1>NAZCA NEURAL DETECTOR</h1>
             <span>CORE MONITOR v8.0 · PROTOTIPO EXPERIMENTAL</span>
