@@ -1,0 +1,14 @@
+.nazca_cache/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+nazca_log_historico.csv
+informes/
+*.pdf
+.streamlit/secrets.toml
