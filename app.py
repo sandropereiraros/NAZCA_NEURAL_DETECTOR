@@ -21,6 +21,9 @@ st.set_page_config(page_title="NAZCA CORE MONITOR v8.0", layout="wide")
 
 PESOS = {"SISMO_BVAL": 0.62, "INSAR": 0.18, "CONDUCT": 0.10, "SHOA": 0.06, "ATMOS": 0.01}
 UMBRAL_CRITICO = 75.0
+UMBRAL_NOTIFICACION_TELEGRAM = 70.0
+UMBRAL_MATCH_M7_TELEGRAM = 75.0
+COOLDOWN_TELEGRAM_MIN = 60
 RADIO_ESTACION_KM = 350
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
 INTERVALOS_API = {"10 minutos": 600, "30 minutos": 1800, "1 hora": 3600, "Desactivado": 3600}
@@ -283,6 +286,77 @@ def leer_bitacora_bytes():
         with open("nazca_log_historico.csv", "rb") as f:
             return f.read()
     return None
+
+
+def obtener_secret(nombre):
+    try:
+        return st.secrets.get(nombre, "")
+    except Exception:
+        return ""
+
+
+def telegram_configurado():
+    return bool(obtener_secret("TELEGRAM_TOKEN") and obtener_secret("TELEGRAM_CHAT_ID"))
+
+
+def enviar_telegram(mensaje):
+    token = obtener_secret("TELEGRAM_TOKEN")
+    chat_id = obtener_secret("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False, "Telegram no configurado en secrets."
+    try:
+        res = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": sanitizar_texto(mensaje),
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=10,
+        )
+        if res.status_code == 200:
+            return True, "Notificacion enviada."
+        return False, f"Telegram HTTP {res.status_code}: {res.text[:160]}"
+    except requests.RequestException as exc:
+        return False, f"Error Telegram: {exc}"
+
+
+def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo):
+    if modo_demo:
+        return False, "Modo demo: notificacion real bloqueada."
+    if puntaje < UMBRAL_NOTIFICACION_TELEGRAM:
+        return False, "Riesgo bajo umbral Telegram."
+    if mejor_match < UMBRAL_MATCH_M7_TELEGRAM:
+        return False, "Match M7+ bajo umbral Telegram."
+
+    clave = f"telegram_{estacion}_{mejor_ev}"
+    ultimo = st.session_state.get(clave)
+    ahora = datetime.now()
+    if ultimo and ahora - ultimo < timedelta(minutes=COOLDOWN_TELEGRAM_MIN):
+        restante = COOLDOWN_TELEGRAM_MIN - int((ahora - ultimo).total_seconds() // 60)
+        return False, f"Cooldown activo ({restante} min)."
+    return True, clave
+
+
+def construir_mensaje_telegram(
+    estacion, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+    mejor_ev, mejor_match, consultado_usgs,
+):
+    return (
+        "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
+        "No es alerta oficial ni prediccion deterministica.\n\n"
+        f"Estacion: {estacion}\n"
+        f"Estado interno: {estado}\n"
+        f"Indice vigilancia: {puntaje:.1f}%\n"
+        f"Patron M7+ similar: {mejor_ev} ({mejor_match:.1f}%)\n"
+        f"Sismos locales 14D: {total_sismos}\n"
+        f"b-value local: {b_val}\n"
+        f"InSAR estimado: {insar:.1f}%\n"
+        f"EM: {cond} mS/m | SHOA: {shoa} cm\n"
+        f"USGS: {consultado_usgs}\n\n"
+        "Accion sugerida: revisar tendencia, generar PDF tecnico y validar con especialista."
+    )
 
 
 def distancia_km(lat1, lon1, lat2, lon2):
@@ -725,6 +799,14 @@ modo_demo = st.sidebar.checkbox("Simulación Catastrófica", value=False)
 modo_sat = st.sidebar.toggle("Colapso red terrestre (satelital)", value=False)
 canal = "SATELITAL LEO" if modo_sat else "TERRESTRE"
 
+st.sidebar.markdown("---")
+telegram_activo = st.sidebar.toggle("Telegram vigilancia M7+", value=False)
+if telegram_activo:
+    if telegram_configurado():
+        st.sidebar.success("Telegram configurado.")
+    else:
+        st.sidebar.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en secrets.")
+
 estacion_sel = st.sidebar.selectbox("Estación", list(ESTACIONES_CONFIG.keys()), index=3)
 config = ESTACIONES_CONFIG[estacion_sel]
 
@@ -784,6 +866,22 @@ df_calibracion = construir_calibracion_estaciones(
     df_sismos, kp, ttl_seg, modo_sat, consultado_usgs, consultado_noaa
 )
 
+telegram_estado = "Telegram desactivado."
+if telegram_activo:
+    puede_notificar, detalle_notificacion = debe_notificar_telegram(
+        estacion_sel, mejor_ev, puntaje, mejor_match, modo_demo
+    )
+    if puede_notificar:
+        mensaje = construir_mensaje_telegram(
+            estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+            mejor_ev, mejor_match, consultado_usgs,
+        )
+        ok_telegram, telegram_estado = enviar_telegram(mensaje)
+        if ok_telegram:
+            st.session_state[detalle_notificacion] = datetime.now()
+    else:
+        telegram_estado = detalle_notificacion
+
 # ==============================================================================
 # INTERFAZ
 # ==============================================================================
@@ -829,6 +927,13 @@ with tab_vivo:
     st.caption(log_filtro)
     if nodo_offline:
         st.warning("Nodo offline — telemetría por interpolación de vecindad.")
+    if telegram_activo:
+        st.caption(f"Telegram vigilancia M7+: {telegram_estado}")
+        if st.button("Enviar prueba Telegram", use_container_width=True):
+            ok_test, msg_test = enviar_telegram(
+                "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
+            )
+            st.success(msg_test) if ok_test else st.warning(msg_test)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", f"{icono}")
