@@ -224,9 +224,41 @@ def kp_noaa_cacheado(ttl_seg):
 # UTILIDADES
 # ==============================================================================
 def sanitizar_texto(texto):
-    for e in ["🟢", "🟡", "🟠", "🔴", "🚨", "⚠️", "✅", "🛰️", "🌐"]:
-        texto = texto.replace(e, "")
-    return texto
+    texto = "" if texto is None else str(texto)
+    reemplazos = {
+        "🟢": "",
+        "🟡": "",
+        "🟠": "",
+        "🔴": "",
+        "🚨": "",
+        "⚠️": "",
+        "✅": "",
+        "🛰️": "",
+        "🌐": "",
+        "—": "-",
+        "–": "-",
+        "·": "-",
+        "≤": "<=",
+        "≥": ">=",
+        "±": "+/-",
+        "Δ": "Delta",
+        "σ": "sigma",
+        "í": "i",
+        "Í": "I",
+        "ó": "o",
+        "Ó": "O",
+        "á": "a",
+        "Á": "A",
+        "é": "e",
+        "É": "E",
+        "ú": "u",
+        "Ú": "U",
+        "ñ": "n",
+        "Ñ": "N",
+    }
+    for original, seguro in reemplazos.items():
+        texto = texto.replace(original, seguro)
+    return texto.encode("latin-1", errors="ignore").decode("latin-1")
 
 
 def registrar_en_bitacora(estacion, estado, puntaje, insar, b_val, cond, shoa):
@@ -534,6 +566,14 @@ def agregar_linea_pdf(pdf, etiqueta, valor):
     pdf.cell(0, 6, sanitizar_texto(str(valor)), border=1, ln=True)
 
 
+def pdf_cell(pdf, w, h, texto, **kwargs):
+    pdf.cell(w, h, sanitizar_texto(texto), **kwargs)
+
+
+def pdf_multi_cell(pdf, w, h, texto, **kwargs):
+    pdf.multi_cell(w, h, sanitizar_texto(texto), **kwargs)
+
+
 def generar_pdf(
     estacion, puntaje, estado, b_val, cond, shoa, sismos_cnt, canal, kp,
     config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
@@ -557,16 +597,16 @@ def generar_pdf(
         pdf.image(LOGO_PATH, x=12, y=10, w=28)
     pdf.set_xy(44, 11)
     pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 8, "NAZCA NEURAL DETECTOR", ln=True)
+    pdf_cell(pdf, 0, 8, "NAZCA NEURAL DETECTOR", ln=True)
     pdf.set_x(44)
     pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 6, "Informe tecnico preliminar de monitoreo sismico - Core Monitor v8.0", ln=True)
+    pdf_cell(pdf, 0, 6, "Informe tecnico preliminar de monitoreo sismico - Core Monitor v8.0", ln=True)
     pdf.set_x(44)
-    pdf.cell(0, 6, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+    pdf_cell(pdf, 0, 6, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(12)
 
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "1. Resumen ejecutivo", ln=True)
+    pdf_cell(pdf, 0, 8, "1. Resumen ejecutivo", ln=True)
     agregar_linea_pdf(pdf, "Estacion evaluada", estacion)
     agregar_linea_pdf(pdf, "Estado del sistema", estado)
     agregar_linea_pdf(pdf, "Indice de vigilancia", f"{puntaje:.1f}%")
@@ -575,13 +615,13 @@ def generar_pdf(
     pdf.ln(4)
 
     pdf.set_font("Arial", "", 9)
-    pdf.multi_cell(0, 5, sanitizar_texto(
+    pdf_multi_cell(pdf, 0, 5,
         f"Lectura tecnica: {interpretacion} Este reporte no constituye alerta oficial ni prediccion deterministica."
-    ))
+    )
     pdf.ln(3)
 
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "2. Parametros actuales medidos/calculados", ln=True)
+    pdf_cell(pdf, 0, 8, "2. Parametros actuales medidos/calculados", ln=True)
     agregar_linea_pdf(pdf, "Sismos locales 14D", f"{sismos_cnt} eventos en radio {RADIO_ESTACION_KM} km")
     agregar_linea_pdf(pdf, "Sismos Chile 14D", total_sismos_chile)
     agregar_linea_pdf(pdf, "b-value local 14D", b_val)
@@ -594,7 +634,7 @@ def generar_pdf(
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "3. Comparativa contra parametros normales del sector", ln=True)
+    pdf_cell(pdf, 0, 8, "3. Comparativa contra parametros normales del sector", ln=True)
     agregar_linea_pdf(pdf, "EM normal sector", f"{config['baseline_cond']} mS/m")
     agregar_linea_pdf(pdf, "EM actual vs normal", f"{cond} mS/m | delta {delta_cond:+.2f} | z-score {z_cond:+.2f}")
     agregar_linea_pdf(pdf, "Presion normal sector", f"{config['baseline_pres']} hPa")
@@ -603,14 +643,14 @@ def generar_pdf(
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "4. Comparativa historica M7+", ln=True)
+    pdf_cell(pdf, 0, 8, "4. Comparativa historica M7+", ln=True)
     agregar_linea_pdf(pdf, "Patron mas similar", mejor_ev)
     agregar_linea_pdf(pdf, "Match con patron", f"{mejor_match:.1f}%")
     agregar_linea_pdf(pdf, "Criterio", "Comparacion heuristica con firmas historicas precargadas")
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "5. Fuentes y trazabilidad", ln=True)
+    pdf_cell(pdf, 0, 8, "5. Fuentes y trazabilidad", ln=True)
     agregar_linea_pdf(pdf, "USGS actualizado", consultado_usgs)
     agregar_linea_pdf(pdf, "NOAA actualizado", consultado_noaa)
     agregar_linea_pdf(pdf, "Origen EM/telemetria", origen_em)
@@ -618,13 +658,13 @@ def generar_pdf(
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "6. Limitacion tecnica", ln=True)
+    pdf_cell(pdf, 0, 8, "6. Limitacion tecnica", ln=True)
     pdf.set_font("Arial", "", 9)
-    pdf.multi_cell(0, 5, sanitizar_texto(
+    pdf_multi_cell(pdf, 0, 5,
         "NAZCA Core Monitor es un prototipo experimental de apoyo al monitoreo. "
         "Las variables InSAR, SHOA, EM, presion y termico pueden ser estimadas si no existen sensores reales conectados. "
         "Toda decision operacional debe ser validada por profesionales competentes y organismos oficiales."
-    ))
+    )
 
     out = pdf.output(dest="S")
     return out.encode("latin-1") if isinstance(out, str) else bytes(out)
