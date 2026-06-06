@@ -1,19 +1,25 @@
-# :earth_americas: GDP dashboard template
+# NAZCA Neural Detector
 
-A simple Streamlit app showing the GDP of different countries in the world.
+Prototipo experimental de vigilancia sismica para pruebas privadas e investigacion personal.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://gdp-dashboard-template.streamlit.app/)
+## Alcance
 
-### How to run it on your own machine
+Este sistema no emite alertas oficiales ni predice terremotos. Integra datos sismicos, cache local, comparativas M7+, niveles de vigilancia experimental, PDF tecnico y notificaciones Telegram para pruebas internas.
 
-1. Install the requirements
+## Ejecucion local
 
-   ```
-   $ pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
 
-2. Run the app
+## Variables privadas
 
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+Configurar en Streamlit Secrets o `.streamlit/secrets.toml` local:
+
+```toml
+TELEGRAM_TOKEN = "..."
+TELEGRAM_CHAT_ID = "..."
+```
+
+No subir secrets a GitHub.
