@@ -436,14 +436,12 @@ def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo
 
 
 def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo):
-    if modo_demo:
-        return False, "Modo demo: notificacion real bloqueada."
-    if puntaje < UMBRAL_NOTIFICACION_TELEGRAM:
+    if not modo_demo and puntaje < UMBRAL_NOTIFICACION_TELEGRAM:
         return False, "Riesgo bajo umbral Telegram."
-    if mejor_match < UMBRAL_MATCH_M7_TELEGRAM:
+    if not modo_demo and mejor_match < UMBRAL_MATCH_M7_TELEGRAM:
         return False, "Match M7+ bajo umbral Telegram."
 
-    clave = f"telegram_{estacion}_{mejor_ev}"
+    clave = f"telegram_{'demo_' if modo_demo else ''}{estacion}_{mejor_ev}"
     ultimo = st.session_state.get(clave)
     ahora = datetime.now()
     if ultimo and ahora - ultimo < timedelta(minutes=COOLDOWN_TELEGRAM_MIN):
@@ -454,10 +452,16 @@ def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo)
 
 def construir_mensaje_telegram(
     estacion, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-    mejor_ev, mejor_match, consultado_usgs, nivel_alerta, ventana_vigilancia,
+    mejor_ev, mejor_match, consultado_usgs, nivel_alerta, ventana_vigilancia, modo_demo=False,
 ):
+    if modo_demo:
+        encabezado = "NAZCA CORE MONITOR - SIMULACION DE EMERGENCIA\n"
+        nota_demo = "\nMODO DEMO ACTIVO: mensaje de prueba operacional, no corresponde a evento real.\n"
+    else:
+        encabezado = "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
+        nota_demo = ""
     return (
-        "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
+        encabezado +
         "No es alerta oficial ni prediccion deterministica.\n\n"
         f"Estacion: {estacion}\n"
         f"Estado interno: {estado}\n"
@@ -470,6 +474,7 @@ def construir_mensaje_telegram(
         f"InSAR estimado: {insar:.1f}%\n"
         f"EM: {cond} mS/m | SHOA: {shoa} cm\n"
         f"USGS: {consultado_usgs}\n\n"
+        f"{nota_demo}"
         "Accion sugerida: revisar tendencia, generar PDF tecnico y validar con especialista."
     )
 
@@ -1039,6 +1044,7 @@ if telegram_activo:
             estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
             mejor_ev, mejor_match, consultado_usgs,
             f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+            modo_demo=modo_demo,
         )
         ok_telegram, telegram_estado = enviar_telegram(mensaje)
         if ok_telegram:
@@ -1127,6 +1133,15 @@ with tab_vivo:
                 "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
             )
             st.success(msg_test) if ok_test else st.warning(msg_test)
+        if modo_demo and st.button("Enviar demo de emergencia Telegram", use_container_width=True):
+            mensaje_demo = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+                modo_demo=True,
+            )
+            ok_demo, msg_demo = enviar_telegram(mensaje_demo)
+            st.success(msg_demo) if ok_demo else st.warning(msg_demo)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", f"{icono}")
