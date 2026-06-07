@@ -5,4 +5,3 @@ requests
 folium
 streamlit-folium
 fpdf
-eew_api/

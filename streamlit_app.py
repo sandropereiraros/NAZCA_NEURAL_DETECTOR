@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from fpdf import FPDF
 from streamlit_folium import st_folium
 
@@ -510,31 +509,8 @@ def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos):
 
 
 def render_sirena_alerta():
-    components.html(
-        """
-        <script>
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        function beep(freq, start, duration) {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.frequency.value = freq;
-            osc.type = "sine";
-            gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
-            gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + start + 0.03);
-            gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(ctx.currentTime + start);
-            osc.stop(ctx.currentTime + start + duration);
-        }
-        for (let i = 0; i < 3; i++) {
-            beep(740, i * 0.7, 0.42);
-            beep(420, i * 0.7 + 0.35, 0.35);
-        }
-        </script>
-        """,
-        height=0,
-    )
+    st.error("SIRENA LOCAL: vigilancia roja experimental. Validar con fuentes oficiales.")
+    st.toast("Vigilancia roja experimental", icon="🚨")
 
 
 def distancia_km(lat1, lon1, lat2, lon2):
@@ -1345,8 +1321,3 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if intervalo != "Desactivado":
-    components.html(
-        f"<script>setTimeout(()=>window.parent.location.reload(),{ttl_seg * 1000});</script>",
-        height=0,
-    )
