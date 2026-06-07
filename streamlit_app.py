@@ -24,7 +24,7 @@ COOLDOWN_TELEGRAM_MIN = 60
 UMBRAL_SIRENA_ROJA = 85.0
 RADIO_ESTACION_KM = 350
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
-INTERVALOS_API = {"10 minutos": 600, "30 minutos": 1800, "1 hora": 3600, "Desactivado": 3600}
+INTERVALOS_API = {"3 horas": 10800, "6 horas": 21600, "12 horas": 43200, "24 horas": 86400}
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nazca_cache")
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nazca_logo.png")
 SUSCRIPTORES_TELEGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_suscriptores_telegram.json")
@@ -431,6 +431,22 @@ def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo
         enviados += 1 if ok else 0
         errores += 0 if ok else 1
     return f"Suscriptores notificados: {enviados} | errores: {errores}"
+
+
+def enviar_prueba_suscriptores(mensaje):
+    enviados = 0
+    errores = 0
+    for sub in cargar_suscriptores_telegram():
+        if not sub.get("activo", True):
+            continue
+        ok, _ = enviar_telegram(mensaje, chat_id=sub.get("chat_id"))
+        enviados += 1 if ok else 0
+        errores += 0 if ok else 1
+    return enviados, errores
+
+
+def contar_suscriptores_activos():
+    return sum(1 for sub in cargar_suscriptores_telegram() if sub.get("activo", True))
 
 
 def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo):
@@ -914,9 +930,10 @@ intervalo = st.sidebar.selectbox(
     index=1,
 )
 ttl_seg = INTERVALOS_API[intervalo]
+ttl_horas = max(1, ttl_seg // 3600)
 
 st.sidebar.caption(
-    f"Las APIs se consultan como máximo cada **{ttl_seg // 60} min**. "
+    f"Las APIs se consultan como máximo cada **{ttl_horas} h**. "
     "Entre consultas se sirven datos desde `.nazca_cache/`."
 )
 
@@ -1261,19 +1278,27 @@ with tab_calidad:
         st.text(informe_calidad)
 
 with tab_suscripcion:
-    st.markdown("### Suscripción Telegram experimental")
+    st.markdown("### Suscripción gratuita Telegram")
     st.info(
-        "Registro privado para pruebas familiares. Las notificaciones son experimentales, no oficiales "
-        "y no representan una predicción determinística."
+        "Registro gratuito para participar en pruebas privadas del sistema. Las notificaciones son experimentales, "
+        "no oficiales y no representan una predicción determinística."
+    )
+    st.caption(
+        "Privacidad: el registro no se muestra públicamente en la web. Los datos se usan solo para enviar avisos "
+        "experimentales por Telegram."
+    )
+    st.write(
+        "Para suscribirte: abre el bot de Telegram, presiona **Start** o envía `/start`, "
+        "obtén tu **Chat ID** con @userinfobot o @RawDataBot, y completa este formulario."
     )
 
     with st.form("form_suscripcion_telegram"):
-        nombre_sub = st.text_input("Nombre", placeholder="Ej: Mamá, Hermano, Sandra")
+        nombre_sub = st.text_input("Nombre o alias", placeholder="Ej: Sandro, primo, equipo pruebas")
         chat_id_sub = st.text_input("Telegram Chat ID", placeholder="Ej: 7321245766")
         estacion_sub = st.selectbox("Zona / estación de interés", ["Todas"] + list(ESTACIONES_CONFIG.keys()))
-        nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=1)
-        acepta_sub = st.checkbox("Acepto que es una prueba privada experimental y no una alerta oficial.")
-        registrar_sub = st.form_submit_button("Registrar / actualizar suscripción", use_container_width=True)
+        nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=0)
+        acepta_sub = st.checkbox("Acepto participar en una prueba gratuita, experimental y no oficial.")
+        registrar_sub = st.form_submit_button("Suscribirme gratis / actualizar datos", use_container_width=True)
 
     if registrar_sub:
         if not chat_id_sub.strip().isdigit():
@@ -1282,24 +1307,23 @@ with tab_suscripcion:
             st.warning("Debes aceptar la condición experimental/no oficial.")
         else:
             sub = upsert_suscriptor_telegram(nombre_sub, chat_id_sub, estacion_sub, nivel_sub)
-            st.success(f"Suscripción registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
+            st.success(f"Suscripción gratuita registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
+            ok_bienvenida, msg_bienvenida = enviar_telegram(
+                "NAZCA CORE MONITOR - suscripcion gratuita registrada. Recibiras avisos experimentales segun tu configuracion. No es alerta oficial.",
+                chat_id=sub["chat_id"],
+            )
+            if ok_bienvenida:
+                st.success("Mensaje de bienvenida enviado por Telegram.")
+            else:
+                st.warning(f"Suscripción guardada, pero Telegram respondió: {msg_bienvenida}")
 
-    suscriptores = cargar_suscriptores_telegram()
-    st.markdown("#### Suscriptores activos")
-    if suscriptores:
-        df_subs = pd.DataFrame([{
-            "Nombre": s.get("nombre"),
-            "Chat ID": str(s.get("chat_id"))[-4:].rjust(len(str(s.get("chat_id"))), "*"),
-            "Estación": s.get("estacion"),
-            "Nivel mínimo": s.get("nivel_minimo"),
-            "Activo": "Sí" if s.get("activo", True) else "No",
-            "Registrado": s.get("registrado"),
-        } for s in suscriptores])
-        st.dataframe(df_subs, use_container_width=True, hide_index=True)
-    else:
-        st.caption("Aún no hay suscriptores registrados.")
+    st.markdown("#### Estado privado de suscripción")
+    st.caption(
+        f"Suscriptores activos registrados: {contar_suscriptores_activos()}. "
+        "Por privacidad, nombres y Chat ID no se muestran en la interfaz pública."
+    )
 
-    st.markdown("#### Prueba de envío")
+    st.markdown("#### Pruebas de envío")
     chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
     if st.button("Enviar prueba a suscriptor", use_container_width=True):
         if not chat_prueba.strip().isdigit():
@@ -1314,7 +1338,13 @@ with tab_suscripcion:
             else:
                 st.warning(msg_sub)
 
-st.sidebar.metric("Próxima API", f"≤ {ttl_seg // 60} min")
+    if st.button("Enviar prueba a todos los suscriptores activos", use_container_width=True):
+        enviados, errores = enviar_prueba_suscriptores(
+            "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
+        )
+        st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
+
+st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")
 
 st.markdown(
