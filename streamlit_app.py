@@ -5,13 +5,11 @@ import base64
 import unicodedata
 from datetime import datetime, timedelta
 
-import folium
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 from fpdf import FPDF
-from streamlit_folium import st_folium
 
 # ==============================================================================
 # CONFIGURACIÓN
@@ -515,7 +513,6 @@ def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos):
 
 def render_sirena_alerta():
     st.error("SIRENA LOCAL: vigilancia roja experimental. Validar con fuentes oficiales.")
-    st.toast("Vigilancia roja experimental", icon="🚨")
 
 
 def distancia_km(lat1, lon1, lat2, lon2):
@@ -770,35 +767,8 @@ como apoyo exploratorio, no como aviso oficial ni reemplazo de organismos técni
 """
 
 # ==============================================================================
-# MAPA + PDF
+# PDF
 # ==============================================================================
-@st.cache_data(ttl=600)
-def crear_mapa(lat, lon, sismos_tuple, color_nodo):
-    mapa = folium.Map(location=[-33.0, -71.5], zoom_start=4, tiles=None, control_scale=True)
-    folium.TileLayer(
-        "CartoDB dark_matter",
-        name="Mapa oscuro",
-        control=False,
-        attr="CartoDB",
-    ).add_to(mapa)
-    folium.PolyLine(
-        [[-15, -75], [-25, -71.5], [-35, -73], [-46, -75.5]],
-        color="#00f5ff", weight=3, opacity=0.85,
-    ).add_to(mapa)
-    folium.Marker([lat, lon], tooltip="Nodo activo", icon=folium.Icon(color=color_nodo, icon="signal")).add_to(mapa)
-    for la, lo, mag in sismos_tuple:
-        folium.CircleMarker(
-            [la, lo], radius=max(3.5, mag * 1.5),
-            color="#ff003c" if mag >= 4 else "#facc15",
-            fill=True,
-            fill_color="#ff003c" if mag >= 4 else "#facc15",
-            fill_opacity=0.75,
-            weight=1,
-            tooltip=f"M{mag:.1f}",
-        ).add_to(mapa)
-    return mapa
-
-
 def agregar_linea_pdf(pdf, etiqueta, valor):
     pdf.set_font("Arial", "B", 9)
     pdf.cell(55, 6, sanitizar_texto(str(etiqueta)), border=1)
@@ -1076,7 +1046,7 @@ st.markdown(
 st.caption(f"Enlace: **{canal}** | Caché APIs: **{intervalo}**")
 
 if api_nueva:
-    st.toast("Datos actualizados desde USGS / NOAA", icon="🔄")
+    st.success("Datos actualizados desde USGS / NOAA")
 else:
     st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
 
@@ -1161,9 +1131,20 @@ with tab_vivo:
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        puntos = tuple((r.Latitud, r.Longitud, r.Magnitud) for r in df_sismos.itertuples(index=False)) if not df_sismos.empty else ()
-        color = "orange" if nodo_offline else "blue"
-        st_folium(crear_mapa(config["lat"], config["lon"], puntos, color), width="100%", height=420)
+        st.markdown("#### Mapa sísmico regional")
+        mapa_df = pd.DataFrame([{
+            "lat": config["lat"],
+            "lon": config["lon"],
+            "size": 160,
+            "color": "#f97316" if nodo_offline else "#3b82f6",
+        }])
+        if not df_sismos.empty:
+            sismos_mapa = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
+            sismos_mapa = sismos_mapa[["lat", "lon", "mag"]].copy()
+            sismos_mapa["size"] = (sismos_mapa["mag"].clip(lower=2.5) ** 2) * 12
+            sismos_mapa["color"] = np.where(sismos_mapa["mag"] >= 4.0, "#ef4444", "#facc15")
+            mapa_df = pd.concat([mapa_df, sismos_mapa[["lat", "lon", "size", "color"]]], ignore_index=True)
+        st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=4)
 
     with col_tabla:
         st.caption(
