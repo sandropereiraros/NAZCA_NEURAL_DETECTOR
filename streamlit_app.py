@@ -1102,7 +1102,10 @@ with tab_vivo:
             ok_test, msg_test = enviar_telegram(
                 "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
             )
-            st.success(msg_test) if ok_test else st.warning(msg_test)
+            if ok_test:
+                st.success(msg_test)
+            else:
+                st.warning(msg_test)
         if modo_demo and st.button("Enviar demo de emergencia Telegram", use_container_width=True):
             mensaje_demo = construir_mensaje_telegram(
                 estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
@@ -1111,7 +1114,10 @@ with tab_vivo:
                 modo_demo=True,
             )
             ok_demo, msg_demo = enviar_telegram(mensaje_demo)
-            st.success(msg_demo) if ok_demo else st.warning(msg_demo)
+            if ok_demo:
+                st.success(msg_demo)
+            else:
+                st.warning(msg_demo)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", f"{icono}")
@@ -1303,7 +1309,10 @@ with tab_suscripcion:
                 "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
                 chat_id=chat_prueba.strip(),
             )
-            st.success(msg_sub) if ok_sub else st.warning(msg_sub)
+            if ok_sub:
+                st.success(msg_sub)
+            else:
+                st.warning(msg_sub)
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_seg // 60} min")
 st.sidebar.metric("b-value regional", f"{b_val}")
