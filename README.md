@@ -28,6 +28,11 @@ Configurar en Streamlit Secrets o `.streamlit/secrets.toml` local:
 ```toml
 TELEGRAM_TOKEN = "..."
 TELEGRAM_CHAT_ID = "..."
+SUBSCRIBERS_WEBAPP_URL = "..."
+SUBSCRIBERS_API_KEY = "..."
+ADMIN_PIN = "..."
 ```
 
 No subir secrets a GitHub.
+
+Para suscripciones persistentes por Google Sheets, revisar `GOOGLE_APPS_SCRIPT.md`.

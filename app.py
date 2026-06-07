@@ -344,6 +344,64 @@ def telegram_configurado():
     return bool(obtener_secret("TELEGRAM_TOKEN") and obtener_secret("TELEGRAM_CHAT_ID"))
 
 
+def normalizar_suscriptores(suscriptores):
+    normalizados = []
+    vistos = set()
+    for sub in suscriptores:
+        if not isinstance(sub, dict):
+            continue
+        chat_id = str(sub.get("chat_id", "")).strip()
+        if not chat_id or chat_id in vistos:
+            continue
+        vistos.add(chat_id)
+        normalizados.append({
+            "nombre": sanitizar_texto(sub.get("nombre", "Suscriptor")).strip() or "Suscriptor",
+            "chat_id": chat_id,
+            "estacion": sub.get("estacion", "Todas"),
+            "nivel_minimo": sub.get("nivel_minimo", "AMARILLO"),
+            "activo": bool(sub.get("activo", True)),
+            "registrado": sub.get("registrado", "secrets"),
+        })
+    return normalizados
+
+
+def apps_script_configurado():
+    return bool(obtener_secret("SUBSCRIBERS_WEBAPP_URL") and obtener_secret("SUBSCRIBERS_API_KEY"))
+
+
+def llamar_apps_script(payload):
+    url = obtener_secret("SUBSCRIBERS_WEBAPP_URL")
+    api_key = obtener_secret("SUBSCRIBERS_API_KEY")
+    if not url or not api_key:
+        return None, "Google Apps Script no configurado."
+    try:
+        res = requests.post(
+            url,
+            json={**payload, "api_key": api_key},
+            timeout=12,
+        )
+        if res.status_code != 200:
+            return None, f"Apps Script HTTP {res.status_code}: {res.text[:160]}"
+        datos = res.json()
+        if not datos.get("ok"):
+            return None, datos.get("error", "Apps Script rechazo la solicitud.")
+        return datos, "OK"
+    except (requests.RequestException, ValueError) as exc:
+        return None, f"Error Apps Script: {exc}"
+
+
+def cargar_suscriptores_apps_script():
+    datos, _ = llamar_apps_script({"action": "list"})
+    if not datos:
+        return []
+    return normalizar_suscriptores(datos.get("subscribers", []))
+
+
+def guardar_suscriptor_apps_script(suscriptor):
+    datos, msg = llamar_apps_script({"action": "upsert", "subscriber": suscriptor})
+    return bool(datos), msg
+
+
 def enviar_telegram(mensaje, chat_id=None):
     token = obtener_secret("TELEGRAM_TOKEN")
     chat_id = chat_id or obtener_secret("TELEGRAM_CHAT_ID")
@@ -368,14 +426,28 @@ def enviar_telegram(mensaje, chat_id=None):
 
 
 def cargar_suscriptores_telegram():
+    suscriptores = []
+    suscriptores.extend(cargar_suscriptores_apps_script())
+
+    secretos_json = obtener_secret("TELEGRAM_SUBSCRIBERS_JSON")
+    if secretos_json:
+        try:
+            datos_secretos = json.loads(secretos_json)
+            if isinstance(datos_secretos, list):
+                suscriptores.extend(datos_secretos)
+        except json.JSONDecodeError:
+            pass
+
     if not os.path.exists(SUSCRIPTORES_TELEGRAM):
-        return []
+        return normalizar_suscriptores(suscriptores)
     try:
         with open(SUSCRIPTORES_TELEGRAM, "r", encoding="utf-8") as f:
             datos = json.load(f)
-        return datos if isinstance(datos, list) else []
+        if isinstance(datos, list):
+            suscriptores.extend(datos)
     except (json.JSONDecodeError, OSError):
-        return []
+        pass
+    return normalizar_suscriptores(suscriptores)
 
 
 def guardar_suscriptores_telegram(suscriptores):
@@ -406,6 +478,8 @@ def upsert_suscriptor_telegram(nombre, chat_id, estacion, nivel_minimo):
     if not reemplazado:
         actualizados.append(nuevo)
     guardar_suscriptores_telegram(actualizados)
+    if apps_script_configurado():
+        guardar_suscriptor_apps_script(nuevo)
     return nuevo
 
 
@@ -939,24 +1013,42 @@ st.sidebar.caption(
     "Entre consultas se sirven datos desde `.nazca_cache/`."
 )
 
-if st.sidebar.button("Limpiar caché APIs", use_container_width=True):
-    if os.path.isdir(CACHE_DIR):
-        for f in os.listdir(CACHE_DIR):
-            os.remove(os.path.join(CACHE_DIR, f))
-    st.sidebar.success("Caché vaciada.")
+st.sidebar.markdown("---")
+admin_pin = st.sidebar.text_input("PIN admin", type="password", placeholder="Opcional")
+admin_esperado = obtener_secret("ADMIN_PIN")
+admin_activo = bool(admin_esperado and admin_pin == admin_esperado)
+if admin_activo:
+    st.sidebar.success("Modo admin activo.")
+elif admin_pin:
+    st.sidebar.warning("PIN admin incorrecto.")
 
-forzar_sismos_14d = st.sidebar.button("Actualizar sismos 14D ahora", use_container_width=True)
-if forzar_sismos_14d:
-    borrar_cache(clave_sismos_14d(ttl_seg))
+if admin_activo:
+    st.sidebar.markdown("#### Herramientas admin")
+    if st.sidebar.button("Limpiar caché APIs", use_container_width=True):
+        if os.path.isdir(CACHE_DIR):
+            for f in os.listdir(CACHE_DIR):
+                os.remove(os.path.join(CACHE_DIR, f))
+        st.sidebar.success("Caché vaciada.")
+
+    forzar_sismos_14d = st.sidebar.button("Actualizar sismos 14D ahora", use_container_width=True)
+    if forzar_sismos_14d:
+        borrar_cache(clave_sismos_14d(ttl_seg))
+else:
+    forzar_sismos_14d = False
 
 st.sidebar.markdown("---")
-modo_demo = st.sidebar.checkbox("Simulación Catastrófica", value=False)
-modo_sat = st.sidebar.toggle("Colapso red terrestre (satelital)", value=False)
+if admin_activo:
+    modo_demo = st.sidebar.checkbox("Simulación Catastrófica", value=False)
+    modo_sat = st.sidebar.toggle("Colapso red terrestre (satelital)", value=False)
+    sirena_activa = st.sidebar.toggle("Sirena local en alerta roja", value=True)
+else:
+    modo_demo = False
+    modo_sat = False
+    sirena_activa = False
 canal = "SATELITAL LEO" if modo_sat else "TERRESTRE"
-sirena_activa = st.sidebar.toggle("Sirena local en alerta roja", value=True)
 
 st.sidebar.markdown("---")
-telegram_activo = st.sidebar.toggle("Telegram vigilancia M7+", value=False)
+telegram_activo = st.sidebar.toggle("Telegram vigilancia M7+", value=False) if admin_activo else False
 if telegram_activo:
     if telegram_configurado():
         st.sidebar.success("Telegram configurado.")
@@ -968,7 +1060,7 @@ config = ESTACIONES_CONFIG[estacion_sel]
 
 st.sidebar.markdown("---")
 bitacora = leer_bitacora_bytes()
-if bitacora:
+if bitacora and admin_activo:
     st.sidebar.download_button("Bitácora CSV", bitacora, "nazca_log_historico.csv", use_container_width=True)
 
 # ==============================================================================
@@ -1078,7 +1170,7 @@ tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion = st.tabs([
 ])
 
 with tab_vivo:
-    if modo_demo:
+    if modo_demo and admin_activo:
         st.error("MODO SIMULACIÓN CATASTRÓFICA ACTIVO - datos ficticios para prueba de respuesta.")
     if puntaje >= 90:
         st.error(f"CRÍTICO — Match {puntaje:.1f}%")
@@ -1115,7 +1207,7 @@ with tab_vivo:
     st.caption(log_filtro)
     if nodo_offline:
         st.warning("Nodo offline — telemetría por interpolación de vecindad.")
-    if telegram_activo:
+    if telegram_activo and admin_activo:
         st.caption(f"Telegram vigilancia M7+: {telegram_estado}")
         if st.button("Enviar prueba Telegram", use_container_width=True):
             ok_test, msg_test = enviar_telegram(
@@ -1300,6 +1392,14 @@ with tab_suscripcion:
         "Privacidad: el registro no se muestra públicamente en la web. Los datos se usan solo para enviar avisos "
         "experimentales por Telegram."
     )
+    st.caption(
+        "Nota técnica: en Streamlit Cloud los registros hechos desde la web pueden reiniciarse al redeploy. "
+        "Para suscriptores permanentes usa TELEGRAM_SUBSCRIBERS_JSON en Secrets privados."
+    )
+    if apps_script_configurado():
+        st.success("Registro persistente conectado a Google Sheets privado.")
+    else:
+        st.warning("Registro persistente Google Sheets no configurado. La suscripción web puede ser temporal.")
     st.write(
         "Para suscribirte: abre el bot de Telegram, presiona **Start** o envía `/start`, "
         "obtén tu **Chat ID** con @userinfobot o @RawDataBot, y completa este formulario."
@@ -1336,26 +1436,27 @@ with tab_suscripcion:
         "Por privacidad, nombres y Chat ID no se muestran en la interfaz pública."
     )
 
-    st.markdown("#### Pruebas de envío")
-    chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
-    if st.button("Enviar prueba a suscriptor", use_container_width=True):
-        if not chat_prueba.strip().isdigit():
-            st.warning("Ingresa un Chat ID numérico.")
-        else:
-            ok_sub, msg_sub = enviar_telegram(
-                "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
-                chat_id=chat_prueba.strip(),
-            )
-            if ok_sub:
-                st.success(msg_sub)
+    if admin_activo:
+        st.markdown("#### Pruebas de envío admin")
+        chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
+        if st.button("Enviar prueba a suscriptor", use_container_width=True):
+            if not chat_prueba.strip().isdigit():
+                st.warning("Ingresa un Chat ID numérico.")
             else:
-                st.warning(msg_sub)
+                ok_sub, msg_sub = enviar_telegram(
+                    "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
+                    chat_id=chat_prueba.strip(),
+                )
+                if ok_sub:
+                    st.success(msg_sub)
+                else:
+                    st.warning(msg_sub)
 
-    if st.button("Enviar prueba a todos los suscriptores activos", use_container_width=True):
-        enviados, errores = enviar_prueba_suscriptores(
-            "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
-        )
-        st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
+        if st.button("Enviar prueba a todos los suscriptores activos", use_container_width=True):
+            enviados, errores = enviar_prueba_suscriptores(
+                "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
+            )
+            st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")
