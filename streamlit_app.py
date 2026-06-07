@@ -151,7 +151,7 @@ EVENTOS_M7 = [
 ]
 
 # ==============================================================================
-# CACHÉ EN DISCO (APIs solo cada 10 / 30 / 60 min)
+# CACHÉ EN DISCO (APIs en ventana móvil 14D, refresco recomendado cada 3-24 h)
 # ==============================================================================
 def _ruta_cache(clave):
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -728,6 +728,7 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
 
 def generar_informe_calidad_texto(df_calibracion, consultado_usgs, consultado_noaa, ttl_seg):
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ttl_horas = max(1, ttl_seg // 3600)
     pesos_txt = "\n".join(f"- {k}: {v:.2f}" for k, v in PESOS.items())
     estaciones_txt = "\n".join(
         f"- {fila['Estación']}: riesgo {fila['Riesgo %']}%, b-value {fila['b-value 14D']}, "
@@ -743,14 +744,15 @@ Este informe documenta los parámetros usados por el sistema para entregar una l
 auditable y apta para revisión por profesionales de geotecnia, geología, sismología o gestión de riesgo.
 
 2. Fuentes y calidad de datos
-- USGS: catálogo sísmico 14 días para Chile. Dato real consultado por API.
-- NOAA Kp: índice geomagnético. Dato real consultado por API.
+- USGS: catálogo sísmico con ventana móvil de 14 días para Chile. Dato real consultado por API.
+- NOAA Kp: índice geomagnético. Dato real consultado por API y servido por caché operativa.
 - b-value: indicador calculado desde magnitudes USGS locales por estación.
 - InSAR, EM, SHOA, presión y térmico: telemetría estimada/simulada mientras no existan sensores o APIs reales conectadas.
 
 Última actualización USGS: {consultado_usgs}
 Última actualización NOAA: {consultado_noaa}
-TTL de caché actual: {ttl_seg // 60} minutos
+TTL de caché actual: {ttl_horas} horas
+Política operativa: no se espera a completar 14 días nuevos; el sistema recalcula con los datos frescos disponibles y mantiene siempre una ventana móvil hacia atrás.
 
 3. Parámetros actuales del modelo
 Radio local por estación: {RADIO_ESTACION_KM} km
@@ -766,8 +768,8 @@ presión o térmico son estimados, el riesgo se limita a vigilancia heurística 
 Una alerta operativa real requiere validación con mediciones instrumentales externas y revisión técnica.
 
 5. Calibración mensual recomendada
-- Revisar catálogo USGS de los últimos 30 días y comparar contra bitácora interna.
-- Recalcular b-value por estación y validar radios de influencia.
+- Revisar la bitácora mensual y contrastar contra ventanas móviles USGS 14D.
+- Recalcular b-value por estación usando la ventana móvil 14D y validar radios de influencia.
 - Ajustar baseline_cond, sigma_cond y baseline_pres con mediciones instrumentales si existen.
 - Revisar falsos positivos: días con riesgo alto sin evento significativo posterior.
 - Revisar falsos negativos: eventos significativos que no elevaron riesgo previamente.
@@ -1135,6 +1137,15 @@ with tab_vivo:
                 st.success(msg_demo)
             else:
                 st.warning(msg_demo)
+        if modo_demo and st.button("Enviar demo de emergencia a suscriptores", use_container_width=True):
+            mensaje_demo_suscriptores = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+                modo_demo=True,
+            )
+            enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
+            st.info(f"Demo enviada a suscriptores activos: {enviados} | errores: {errores}")
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", f"{icono}")
@@ -1216,8 +1227,8 @@ with tab_hist:
 with tab_cal:
     st.markdown("### Calibración de estaciones")
     st.caption(
-        "Esta tabla reúne la misma base sísmica 14D de Chile y recalcula SHOA, InSAR, EM, presión, térmico, "
-        "riesgo y match M7+ para cada estación. Úsala para ajustar baselines y revisar qué estación queda más sensible."
+        "Esta tabla usa una ventana móvil sísmica 14D de Chile y recalcula SHOA, InSAR, EM, presión, térmico, "
+        "riesgo y match M7+ por estación. La base se refresca por caché en horas, no en cada recarga, para evitar ruido y lentitud."
     )
     st.dataframe(df_calibracion, use_container_width=True, hide_index=True)
     st.download_button(
@@ -1236,10 +1247,10 @@ with tab_calidad:
     )
 
     q1, q2, q3, q4 = st.columns(4)
-    q1.metric("Fuente sísmica", "USGS real")
+    q1.metric("Fuente sísmica", "USGS 14D móvil")
     q2.metric("Radio local", f"{RADIO_ESTACION_KM} km")
     q3.metric("Tope heurístico", f"{MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:.0f}%")
-    q4.metric("Calibración", "Mensual")
+    q4.metric("Caché APIs", f"{ttl_horas} h")
 
     st.markdown("#### Parámetros activos")
     df_parametros = pd.DataFrame([
@@ -1251,13 +1262,15 @@ with tab_calidad:
         {"Parámetro": "UMBRAL_CRITICO", "Valor": UMBRAL_CRITICO, "Calidad": "MODELO", "Uso": "Umbral interno de riesgo"},
         {"Parámetro": "RADIO_ESTACION_KM", "Valor": RADIO_ESTACION_KM, "Calidad": "MODELO", "Uso": "Radio local usado para calcular cada estación"},
         {"Parámetro": "MAX_RIESGO_ESTIMADO", "Valor": MAX_RIESGO_CON_TELEMETRIA_ESTIMADA, "Calidad": "CONTROL", "Uso": "Evita alerta crítica con telemetría no instrumental"},
+        {"Parámetro": "VENTANA_SISMICA", "Valor": "14D móvil", "Calidad": "OPERATIVO", "Uso": "Recalcula con datos frescos disponibles sin esperar un ciclo completo"},
+        {"Parámetro": "CACHE_API", "Valor": f"{ttl_horas} h", "Calidad": "OPERATIVO", "Uso": "Reduce llamadas a USGS/NOAA y estabiliza la app pública"},
     ])
     st.dataframe(df_parametros, use_container_width=True, hide_index=True)
 
     st.markdown("#### Protocolo mensual de calibración")
     st.write(
         "1. Exportar la tabla de calibración de estaciones.\n"
-        "2. Revisar bitácora del mes contra eventos reales USGS.\n"
+        "2. Revisar bitácora del mes contra ventanas móviles USGS 14D.\n"
         "3. Separar falsos positivos y falsos negativos.\n"
         "4. Ajustar baselines por estación solo con evidencia.\n"
         "5. Documentar fecha, responsable y motivo del cambio.\n"

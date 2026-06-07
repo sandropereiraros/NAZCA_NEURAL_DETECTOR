@@ -5,14 +5,11 @@ import base64
 import unicodedata
 from datetime import datetime, timedelta
 
-import folium
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from fpdf import FPDF
-from streamlit_folium import st_folium
 
 # ==============================================================================
 # CONFIGURACIÓN
@@ -27,7 +24,7 @@ COOLDOWN_TELEGRAM_MIN = 60
 UMBRAL_SIRENA_ROJA = 85.0
 RADIO_ESTACION_KM = 350
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
-INTERVALOS_API = {"10 minutos": 600, "30 minutos": 1800, "1 hora": 3600, "Desactivado": 3600}
+INTERVALOS_API = {"3 horas": 10800, "6 horas": 21600, "12 horas": 43200, "24 horas": 86400}
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nazca_cache")
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nazca_logo.png")
 SUSCRIPTORES_TELEGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_suscriptores_telegram.json")
@@ -154,7 +151,7 @@ EVENTOS_M7 = [
 ]
 
 # ==============================================================================
-# CACHÉ EN DISCO (APIs solo cada 10 / 30 / 60 min)
+# CACHÉ EN DISCO (APIs en ventana móvil 14D, refresco recomendado cada 3-24 h)
 # ==============================================================================
 def _ruta_cache(clave):
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -436,15 +433,29 @@ def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo
     return f"Suscriptores notificados: {enviados} | errores: {errores}"
 
 
+def enviar_prueba_suscriptores(mensaje):
+    enviados = 0
+    errores = 0
+    for sub in cargar_suscriptores_telegram():
+        if not sub.get("activo", True):
+            continue
+        ok, _ = enviar_telegram(mensaje, chat_id=sub.get("chat_id"))
+        enviados += 1 if ok else 0
+        errores += 0 if ok else 1
+    return enviados, errores
+
+
+def contar_suscriptores_activos():
+    return sum(1 for sub in cargar_suscriptores_telegram() if sub.get("activo", True))
+
+
 def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo):
-    if modo_demo:
-        return False, "Modo demo: notificacion real bloqueada."
-    if puntaje < UMBRAL_NOTIFICACION_TELEGRAM:
+    if not modo_demo and puntaje < UMBRAL_NOTIFICACION_TELEGRAM:
         return False, "Riesgo bajo umbral Telegram."
-    if mejor_match < UMBRAL_MATCH_M7_TELEGRAM:
+    if not modo_demo and mejor_match < UMBRAL_MATCH_M7_TELEGRAM:
         return False, "Match M7+ bajo umbral Telegram."
 
-    clave = f"telegram_{estacion}_{mejor_ev}"
+    clave = f"telegram_{'demo_' if modo_demo else ''}{estacion}_{mejor_ev}"
     ultimo = st.session_state.get(clave)
     ahora = datetime.now()
     if ultimo and ahora - ultimo < timedelta(minutes=COOLDOWN_TELEGRAM_MIN):
@@ -455,10 +466,16 @@ def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo)
 
 def construir_mensaje_telegram(
     estacion, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-    mejor_ev, mejor_match, consultado_usgs, nivel_alerta, ventana_vigilancia,
+    mejor_ev, mejor_match, consultado_usgs, nivel_alerta, ventana_vigilancia, modo_demo=False,
 ):
+    if modo_demo:
+        encabezado = "NAZCA CORE MONITOR - SIMULACION DE EMERGENCIA\n"
+        nota_demo = "\nMODO DEMO ACTIVO: mensaje de prueba operacional, no corresponde a evento real.\n"
+    else:
+        encabezado = "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
+        nota_demo = ""
     return (
-        "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
+        encabezado +
         "No es alerta oficial ni prediccion deterministica.\n\n"
         f"Estacion: {estacion}\n"
         f"Estado interno: {estado}\n"
@@ -471,6 +488,7 @@ def construir_mensaje_telegram(
         f"InSAR estimado: {insar:.1f}%\n"
         f"EM: {cond} mS/m | SHOA: {shoa} cm\n"
         f"USGS: {consultado_usgs}\n\n"
+        f"{nota_demo}"
         "Accion sugerida: revisar tendencia, generar PDF tecnico y validar con especialista."
     )
 
@@ -510,31 +528,7 @@ def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos):
 
 
 def render_sirena_alerta():
-    components.html(
-        """
-        <script>
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        function beep(freq, start, duration) {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.frequency.value = freq;
-            osc.type = "sine";
-            gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
-            gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + start + 0.03);
-            gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(ctx.currentTime + start);
-            osc.stop(ctx.currentTime + start + duration);
-        }
-        for (let i = 0; i < 3; i++) {
-            beep(740, i * 0.7, 0.42);
-            beep(420, i * 0.7 + 0.35, 0.35);
-        }
-        </script>
-        """,
-        height=0,
-    )
+    st.error("SIRENA LOCAL: vigilancia roja experimental. Validar con fuentes oficiales.")
 
 
 def distancia_km(lat1, lon1, lat2, lon2):
@@ -734,6 +728,7 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
 
 def generar_informe_calidad_texto(df_calibracion, consultado_usgs, consultado_noaa, ttl_seg):
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ttl_horas = max(1, ttl_seg // 3600)
     pesos_txt = "\n".join(f"- {k}: {v:.2f}" for k, v in PESOS.items())
     estaciones_txt = "\n".join(
         f"- {fila['Estación']}: riesgo {fila['Riesgo %']}%, b-value {fila['b-value 14D']}, "
@@ -749,14 +744,15 @@ Este informe documenta los parámetros usados por el sistema para entregar una l
 auditable y apta para revisión por profesionales de geotecnia, geología, sismología o gestión de riesgo.
 
 2. Fuentes y calidad de datos
-- USGS: catálogo sísmico 14 días para Chile. Dato real consultado por API.
-- NOAA Kp: índice geomagnético. Dato real consultado por API.
+- USGS: catálogo sísmico con ventana móvil de 14 días para Chile. Dato real consultado por API.
+- NOAA Kp: índice geomagnético. Dato real consultado por API y servido por caché operativa.
 - b-value: indicador calculado desde magnitudes USGS locales por estación.
 - InSAR, EM, SHOA, presión y térmico: telemetría estimada/simulada mientras no existan sensores o APIs reales conectadas.
 
 Última actualización USGS: {consultado_usgs}
 Última actualización NOAA: {consultado_noaa}
-TTL de caché actual: {ttl_seg // 60} minutos
+TTL de caché actual: {ttl_horas} horas
+Política operativa: no se espera a completar 14 días nuevos; el sistema recalcula con los datos frescos disponibles y mantiene siempre una ventana móvil hacia atrás.
 
 3. Parámetros actuales del modelo
 Radio local por estación: {RADIO_ESTACION_KM} km
@@ -772,8 +768,8 @@ presión o térmico son estimados, el riesgo se limita a vigilancia heurística 
 Una alerta operativa real requiere validación con mediciones instrumentales externas y revisión técnica.
 
 5. Calibración mensual recomendada
-- Revisar catálogo USGS de los últimos 30 días y comparar contra bitácora interna.
-- Recalcular b-value por estación y validar radios de influencia.
+- Revisar la bitácora mensual y contrastar contra ventanas móviles USGS 14D.
+- Recalcular b-value por estación usando la ventana móvil 14D y validar radios de influencia.
 - Ajustar baseline_cond, sigma_cond y baseline_pres con mediciones instrumentales si existen.
 - Revisar falsos positivos: días con riesgo alto sin evento significativo posterior.
 - Revisar falsos negativos: eventos significativos que no elevaron riesgo previamente.
@@ -789,35 +785,8 @@ como apoyo exploratorio, no como aviso oficial ni reemplazo de organismos técni
 """
 
 # ==============================================================================
-# MAPA + PDF
+# PDF
 # ==============================================================================
-@st.cache_data(ttl=600)
-def crear_mapa(lat, lon, sismos_tuple, color_nodo):
-    mapa = folium.Map(location=[-33.0, -71.5], zoom_start=4, tiles=None, control_scale=True)
-    folium.TileLayer(
-        "CartoDB dark_matter",
-        name="Mapa oscuro",
-        control=False,
-        attr="CartoDB",
-    ).add_to(mapa)
-    folium.PolyLine(
-        [[-15, -75], [-25, -71.5], [-35, -73], [-46, -75.5]],
-        color="#00f5ff", weight=3, opacity=0.85,
-    ).add_to(mapa)
-    folium.Marker([lat, lon], tooltip="Nodo activo", icon=folium.Icon(color=color_nodo, icon="signal")).add_to(mapa)
-    for la, lo, mag in sismos_tuple:
-        folium.CircleMarker(
-            [la, lo], radius=max(3.5, mag * 1.5),
-            color="#ff003c" if mag >= 4 else "#facc15",
-            fill=True,
-            fill_color="#ff003c" if mag >= 4 else "#facc15",
-            fill_opacity=0.75,
-            weight=1,
-            tooltip=f"M{mag:.1f}",
-        ).add_to(mapa)
-    return mapa
-
-
 def agregar_linea_pdf(pdf, etiqueta, valor):
     pdf.set_font("Arial", "B", 9)
     pdf.cell(55, 6, sanitizar_texto(str(etiqueta)), border=1)
@@ -963,9 +932,10 @@ intervalo = st.sidebar.selectbox(
     index=1,
 )
 ttl_seg = INTERVALOS_API[intervalo]
+ttl_horas = max(1, ttl_seg // 3600)
 
 st.sidebar.caption(
-    f"Las APIs se consultan como máximo cada **{ttl_seg // 60} min**. "
+    f"Las APIs se consultan como máximo cada **{ttl_horas} h**. "
     "Entre consultas se sirven datos desde `.nazca_cache/`."
 )
 
@@ -1063,6 +1033,7 @@ if telegram_activo:
             estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
             mejor_ev, mejor_match, consultado_usgs,
             f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+            modo_demo=modo_demo,
         )
         ok_telegram, telegram_estado = enviar_telegram(mensaje)
         if ok_telegram:
@@ -1094,7 +1065,7 @@ st.markdown(
 st.caption(f"Enlace: **{canal}** | Caché APIs: **{intervalo}**")
 
 if api_nueva:
-    st.toast("Datos actualizados desde USGS / NOAA", icon="🔄")
+    st.success("Datos actualizados desde USGS / NOAA")
 else:
     st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
 
@@ -1150,7 +1121,31 @@ with tab_vivo:
             ok_test, msg_test = enviar_telegram(
                 "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
             )
-            st.success(msg_test) if ok_test else st.warning(msg_test)
+            if ok_test:
+                st.success(msg_test)
+            else:
+                st.warning(msg_test)
+        if modo_demo and st.button("Enviar demo de emergencia Telegram", use_container_width=True):
+            mensaje_demo = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+                modo_demo=True,
+            )
+            ok_demo, msg_demo = enviar_telegram(mensaje_demo)
+            if ok_demo:
+                st.success(msg_demo)
+            else:
+                st.warning(msg_demo)
+        if modo_demo and st.button("Enviar demo de emergencia a suscriptores", use_container_width=True):
+            mensaje_demo_suscriptores = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+                modo_demo=True,
+            )
+            enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
+            st.info(f"Demo enviada a suscriptores activos: {enviados} | errores: {errores}")
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", f"{icono}")
@@ -1170,9 +1165,20 @@ with tab_vivo:
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        puntos = tuple((r.Latitud, r.Longitud, r.Magnitud) for r in df_sismos.itertuples(index=False)) if not df_sismos.empty else ()
-        color = "orange" if nodo_offline else "blue"
-        st_folium(crear_mapa(config["lat"], config["lon"], puntos, color), width="100%", height=420)
+        st.markdown("#### Mapa sísmico regional")
+        mapa_df = pd.DataFrame([{
+            "lat": config["lat"],
+            "lon": config["lon"],
+            "size": 160,
+            "color": "#f97316" if nodo_offline else "#3b82f6",
+        }])
+        if not df_sismos.empty:
+            sismos_mapa = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
+            sismos_mapa = sismos_mapa[["lat", "lon", "mag"]].copy()
+            sismos_mapa["size"] = (sismos_mapa["mag"].clip(lower=2.5) ** 2) * 12
+            sismos_mapa["color"] = np.where(sismos_mapa["mag"] >= 4.0, "#ef4444", "#facc15")
+            mapa_df = pd.concat([mapa_df, sismos_mapa[["lat", "lon", "size", "color"]]], ignore_index=True)
+        st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=4)
 
     with col_tabla:
         st.caption(
@@ -1221,8 +1227,8 @@ with tab_hist:
 with tab_cal:
     st.markdown("### Calibración de estaciones")
     st.caption(
-        "Esta tabla reúne la misma base sísmica 14D de Chile y recalcula SHOA, InSAR, EM, presión, térmico, "
-        "riesgo y match M7+ para cada estación. Úsala para ajustar baselines y revisar qué estación queda más sensible."
+        "Esta tabla usa una ventana móvil sísmica 14D de Chile y recalcula SHOA, InSAR, EM, presión, térmico, "
+        "riesgo y match M7+ por estación. La base se refresca por caché en horas, no en cada recarga, para evitar ruido y lentitud."
     )
     st.dataframe(df_calibracion, use_container_width=True, hide_index=True)
     st.download_button(
@@ -1241,10 +1247,10 @@ with tab_calidad:
     )
 
     q1, q2, q3, q4 = st.columns(4)
-    q1.metric("Fuente sísmica", "USGS real")
+    q1.metric("Fuente sísmica", "USGS 14D móvil")
     q2.metric("Radio local", f"{RADIO_ESTACION_KM} km")
     q3.metric("Tope heurístico", f"{MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:.0f}%")
-    q4.metric("Calibración", "Mensual")
+    q4.metric("Caché APIs", f"{ttl_horas} h")
 
     st.markdown("#### Parámetros activos")
     df_parametros = pd.DataFrame([
@@ -1256,13 +1262,15 @@ with tab_calidad:
         {"Parámetro": "UMBRAL_CRITICO", "Valor": UMBRAL_CRITICO, "Calidad": "MODELO", "Uso": "Umbral interno de riesgo"},
         {"Parámetro": "RADIO_ESTACION_KM", "Valor": RADIO_ESTACION_KM, "Calidad": "MODELO", "Uso": "Radio local usado para calcular cada estación"},
         {"Parámetro": "MAX_RIESGO_ESTIMADO", "Valor": MAX_RIESGO_CON_TELEMETRIA_ESTIMADA, "Calidad": "CONTROL", "Uso": "Evita alerta crítica con telemetría no instrumental"},
+        {"Parámetro": "VENTANA_SISMICA", "Valor": "14D móvil", "Calidad": "OPERATIVO", "Uso": "Recalcula con datos frescos disponibles sin esperar un ciclo completo"},
+        {"Parámetro": "CACHE_API", "Valor": f"{ttl_horas} h", "Calidad": "OPERATIVO", "Uso": "Reduce llamadas a USGS/NOAA y estabiliza la app pública"},
     ])
     st.dataframe(df_parametros, use_container_width=True, hide_index=True)
 
     st.markdown("#### Protocolo mensual de calibración")
     st.write(
         "1. Exportar la tabla de calibración de estaciones.\n"
-        "2. Revisar bitácora del mes contra eventos reales USGS.\n"
+        "2. Revisar bitácora del mes contra ventanas móviles USGS 14D.\n"
         "3. Separar falsos positivos y falsos negativos.\n"
         "4. Ajustar baselines por estación solo con evidencia.\n"
         "5. Documentar fecha, responsable y motivo del cambio.\n"
@@ -1283,19 +1291,27 @@ with tab_calidad:
         st.text(informe_calidad)
 
 with tab_suscripcion:
-    st.markdown("### Suscripción Telegram experimental")
+    st.markdown("### Suscripción gratuita Telegram")
     st.info(
-        "Registro privado para pruebas familiares. Las notificaciones son experimentales, no oficiales "
-        "y no representan una predicción determinística."
+        "Registro gratuito para participar en pruebas privadas del sistema. Las notificaciones son experimentales, "
+        "no oficiales y no representan una predicción determinística."
+    )
+    st.caption(
+        "Privacidad: el registro no se muestra públicamente en la web. Los datos se usan solo para enviar avisos "
+        "experimentales por Telegram."
+    )
+    st.write(
+        "Para suscribirte: abre el bot de Telegram, presiona **Start** o envía `/start`, "
+        "obtén tu **Chat ID** con @userinfobot o @RawDataBot, y completa este formulario."
     )
 
     with st.form("form_suscripcion_telegram"):
-        nombre_sub = st.text_input("Nombre", placeholder="Ej: Mamá, Hermano, Sandra")
+        nombre_sub = st.text_input("Nombre o alias", placeholder="Ej: Sandro, primo, equipo pruebas")
         chat_id_sub = st.text_input("Telegram Chat ID", placeholder="Ej: 7321245766")
         estacion_sub = st.selectbox("Zona / estación de interés", ["Todas"] + list(ESTACIONES_CONFIG.keys()))
-        nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=1)
-        acepta_sub = st.checkbox("Acepto que es una prueba privada experimental y no una alerta oficial.")
-        registrar_sub = st.form_submit_button("Registrar / actualizar suscripción", use_container_width=True)
+        nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=0)
+        acepta_sub = st.checkbox("Acepto participar en una prueba gratuita, experimental y no oficial.")
+        registrar_sub = st.form_submit_button("Suscribirme gratis / actualizar datos", use_container_width=True)
 
     if registrar_sub:
         if not chat_id_sub.strip().isdigit():
@@ -1304,24 +1320,23 @@ with tab_suscripcion:
             st.warning("Debes aceptar la condición experimental/no oficial.")
         else:
             sub = upsert_suscriptor_telegram(nombre_sub, chat_id_sub, estacion_sub, nivel_sub)
-            st.success(f"Suscripción registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
+            st.success(f"Suscripción gratuita registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
+            ok_bienvenida, msg_bienvenida = enviar_telegram(
+                "NAZCA CORE MONITOR - suscripcion gratuita registrada. Recibiras avisos experimentales segun tu configuracion. No es alerta oficial.",
+                chat_id=sub["chat_id"],
+            )
+            if ok_bienvenida:
+                st.success("Mensaje de bienvenida enviado por Telegram.")
+            else:
+                st.warning(f"Suscripción guardada, pero Telegram respondió: {msg_bienvenida}")
 
-    suscriptores = cargar_suscriptores_telegram()
-    st.markdown("#### Suscriptores activos")
-    if suscriptores:
-        df_subs = pd.DataFrame([{
-            "Nombre": s.get("nombre"),
-            "Chat ID": str(s.get("chat_id"))[-4:].rjust(len(str(s.get("chat_id"))), "*"),
-            "Estación": s.get("estacion"),
-            "Nivel mínimo": s.get("nivel_minimo"),
-            "Activo": "Sí" if s.get("activo", True) else "No",
-            "Registrado": s.get("registrado"),
-        } for s in suscriptores])
-        st.dataframe(df_subs, use_container_width=True, hide_index=True)
-    else:
-        st.caption("Aún no hay suscriptores registrados.")
+    st.markdown("#### Estado privado de suscripción")
+    st.caption(
+        f"Suscriptores activos registrados: {contar_suscriptores_activos()}. "
+        "Por privacidad, nombres y Chat ID no se muestran en la interfaz pública."
+    )
 
-    st.markdown("#### Prueba de envío")
+    st.markdown("#### Pruebas de envío")
     chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
     if st.button("Enviar prueba a suscriptor", use_container_width=True):
         if not chat_prueba.strip().isdigit():
@@ -1331,9 +1346,18 @@ with tab_suscripcion:
                 "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
                 chat_id=chat_prueba.strip(),
             )
-            st.success(msg_sub) if ok_sub else st.warning(msg_sub)
+            if ok_sub:
+                st.success(msg_sub)
+            else:
+                st.warning(msg_sub)
 
-st.sidebar.metric("Próxima API", f"≤ {ttl_seg // 60} min")
+    if st.button("Enviar prueba a todos los suscriptores activos", use_container_width=True):
+        enviados, errores = enviar_prueba_suscriptores(
+            "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
+        )
+        st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
+
+st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")
 
 st.markdown(
@@ -1344,9 +1368,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-if intervalo != "Desactivado":
-    components.html(
-        f"<script>setTimeout(()=>window.parent.location.reload(),{ttl_seg * 1000});</script>",
-        height=0,
-    )
