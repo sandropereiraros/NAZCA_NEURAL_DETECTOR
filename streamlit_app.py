@@ -883,7 +883,7 @@ def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura
     deck = pdk.Deck(
         layers=capas,
         initial_view_state=pdk.ViewState(latitude=est_lat or 10, longitude=est_lon or 120, zoom=zoom),
-        map_style="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        map_style=None,
     )
     st.pydeck_chart(deck, height=altura, use_container_width=True)
     st.caption("🟠 Anillo de Fuego · 🔴 sismos USGS M6+ · 🟡 M4.5+ · 🔵 nodo activo")

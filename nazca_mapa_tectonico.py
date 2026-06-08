@@ -212,7 +212,9 @@ def render_mapa_tectonico(
             pitch=0,
             bearing=0,
         ),
-        map_style="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        # None = Streamlit elige basemap Carto válido (light/dark según tema).
+        # La URL raster dark_all/{z}/{x}/{y}.png no carga en pydeck → fondo negro.
+        map_style=None,
         tooltip={
             "html": "<b>{label}</b><br/>Mag: {mag}<br/>{lugar}",
             "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"},
