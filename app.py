@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import random
@@ -13,15 +14,30 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
-try:
-    import nazca_mundo_lab as mundo_lab
-except ImportError:
-    mundo_lab = None
+APP_BUILD = "2026-06-08-v4"
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _cargar_modulo_local(nombre, archivo):
+    ruta = os.path.join(_BASE_DIR, archivo)
+    if not os.path.exists(ruta):
+        return None, f"Falta archivo: {archivo}"
+    try:
+        spec = importlib.util.spec_from_file_location(nombre, ruta)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod, None
+    except Exception as exc:
+        return None, f"Error cargando {archivo}: {exc}"
+
+
+mundo_lab, _err_mundo = _cargar_modulo_local("nazca_mundo_lab", "nazca_mundo_lab.py")
+mapa_tect, _err_mapa = _cargar_modulo_local("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
 
 # ==============================================================================
 # CONFIGURACIÓN
 # ==============================================================================
-st.set_page_config(page_title="NAZCA CORE MONITOR v8.0", layout="wide")
+st.set_page_config(page_title=f"NAZCA CORE MONITOR v8.0 · {APP_BUILD}", layout="wide")
 
 PESOS = {"SISMO_BVAL": 0.62, "INSAR": 0.18, "CONDUCT": 0.10, "SHOA": 0.06, "ATMOS": 0.01}
 UMBRAL_CRITICO = 75.0
@@ -1193,6 +1209,15 @@ admin_esperado = obtener_secret("ADMIN_PIN")
 admin_activo = bool(admin_esperado and admin_pin == admin_esperado)
 if admin_activo:
     st.sidebar.success("Modo admin activo.")
+    _ver_mundo = getattr(mundo_lab, "MUNDO_LAB_VERSION", None) if mundo_lab else None
+    st.sidebar.caption(
+        f"Build app: **{APP_BUILD}** · MUNDO: **{_ver_mundo or 'NO'}** · "
+        f"Mapa: **{'OK' if mapa_tect else 'NO'}**"
+    )
+    if _err_mundo:
+        st.sidebar.error(_err_mundo)
+    if _err_mapa:
+        st.sidebar.warning(_err_mapa)
 elif admin_pin:
     st.sidebar.warning("PIN admin incorrecto.")
 
@@ -1236,8 +1261,38 @@ if telegram_activo:
     else:
         st.sidebar.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en secrets.")
 
-estacion_sel = st.sidebar.selectbox("Estación", list(ESTACIONES_CONFIG.keys()), index=3)
-config = ESTACIONES_CONFIG[estacion_sel]
+_mundo_sidebar = bool(mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo)
+if _mundo_sidebar:
+    red_operativa = st.sidebar.radio(
+        "Red CORE NETWORK",
+        ["Chile Nacional", "Mundo LAB"],
+        horizontal=True,
+    )
+else:
+    red_operativa = "Chile Nacional"
+    nodo_mundo_sel = None
+
+_nodos_mundo = mundo_lab.listar_nodos_mundo() if _mundo_sidebar else []
+_default_mundo = mundo_lab.nodo_por_defecto() if _mundo_sidebar else None
+if "nodo_mundo_sel" not in st.session_state and _default_mundo:
+    st.session_state["nodo_mundo_sel"] = _default_mundo
+
+if red_operativa == "Mundo LAB" and _mundo_sidebar:
+    nodo_mundo_sel = st.sidebar.selectbox(
+        "Nodo global CORE NETWORK",
+        _nodos_mundo,
+        index=_nodos_mundo.index(st.session_state.get("nodo_mundo_sel", _default_mundo)),
+    )
+    st.session_state["nodo_mundo_sel"] = nodo_mundo_sel
+    estacion_sel = list(ESTACIONES_CONFIG.keys())[3]
+    config = ESTACIONES_CONFIG[estacion_sel]
+    st.sidebar.caption(f"Red mundial activa · {nodo_mundo_sel}")
+else:
+    nodo_mundo_sel = st.session_state.get("nodo_mundo_sel", _default_mundo) if _mundo_sidebar else None
+    estacion_sel = st.sidebar.selectbox("Estación Chile", list(ESTACIONES_CONFIG.keys()), index=3)
+    config = ESTACIONES_CONFIG[estacion_sel]
+    if _mundo_sidebar:
+        st.sidebar.caption("Pestaña MUNDO (LAB) usa el último nodo global guardado.")
 
 st.sidebar.markdown("---")
 bitacora = leer_bitacora_bytes()
@@ -1344,7 +1399,16 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.caption(f"Enlace: **{canal}** | Caché APIs: **{intervalo}**")
+st.caption(
+    f"Build **{APP_BUILD}** | Enlace: **{canal}** | Caché APIs: **{intervalo}** | "
+    f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}**"
+)
+if not mundo_lab or not mapa_tect:
+    st.warning(
+        "Deploy incompleto en el servidor. Deben existir en GitHub: "
+        "`nazca_mundo_lab.py`, `nazca_mapa_tectonico.py` y `pydeck` en requirements.txt. "
+        "Luego Reboot en Streamlit Cloud."
+    )
 
 if api_nueva:
     st.success("Datos actualizados desde USGS / NOAA")
@@ -1359,8 +1423,7 @@ _tab_labels = [
     "SUSCRIPCIÓN TELEGRAM",
     "EVIDENCIA Y VALIDACIÓN",
 ]
-if mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo:
-    _tab_labels.append("MUNDO (LAB)")
+_tab_labels.append("MUNDO (LAB)")
 _tabs = st.tabs(_tab_labels)
 tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = _tabs[:6]
 tab_mundo = _tabs[6] if len(_tabs) > 6 else None
@@ -1453,20 +1516,29 @@ with tab_vivo:
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        st.markdown("#### Mapa sísmico regional")
-        mapa_df = pd.DataFrame([{
-            "lat": config["lat"],
-            "lon": config["lon"],
-            "size": 160,
-            "color": "#f97316" if nodo_offline else "#3b82f6",
-        }])
-        if not df_sismos.empty:
-            sismos_mapa = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
-            sismos_mapa = sismos_mapa[["lat", "lon", "mag"]].copy()
-            sismos_mapa["size"] = (sismos_mapa["mag"].clip(lower=2.5) ** 2) * 12
-            sismos_mapa["color"] = np.where(sismos_mapa["mag"] >= 4.0, "#ef4444", "#facc15")
-            mapa_df = pd.concat([mapa_df, sismos_mapa[["lat", "lon", "size", "color"]]], ignore_index=True)
-        st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=4)
+        st.markdown("#### Mapa sísmico regional + línea de fuego")
+        if mapa_tect:
+            mapa_tect.render_mapa_tectonico(
+                df_sismos=df_sismos,
+                estacion_lat=config["lat"],
+                estacion_lon=config["lon"],
+                estacion_label=estacion_sel,
+                estacion_color_rgb=[249, 115, 22, 255] if nodo_offline else [59, 130, 246, 255],
+                lat_center=config["lat"],
+                lon_center=config["lon"],
+                zoom=4,
+                altura=400,
+                mostrar_anillo=True,
+            )
+            st.caption(mapa_tect.leyenda_mapa_tectonico())
+        else:
+            mapa_df = pd.DataFrame([{"lat": config["lat"], "lon": config["lon"], "size": 160, "color": "#3b82f6"}])
+            if not df_sismos.empty:
+                sismos_mapa = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon"})
+                sismos_mapa["size"] = (sismos_mapa["Magnitud"].clip(lower=2.5) ** 2) * 12
+                sismos_mapa["color"] = np.where(sismos_mapa["Magnitud"] >= 4.0, "#ef4444", "#facc15")
+                mapa_df = pd.concat([mapa_df, sismos_mapa[["lat", "lon", "size", "color"]]], ignore_index=True)
+            st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=4)
 
     with col_tabla:
         st.caption(
@@ -1494,7 +1566,8 @@ with tab_vivo:
         )
 
 with tab_hist:
-    st.markdown("### Referencia y Match vs terremotos M7+ (14D pre-sismo)")
+    st.markdown("### Referencia histórica CHILE — Match vs terremotos M7+ (14D pre-sismo)")
+    st.caption("Solo eventos nacionales. Terremotos mundiales están en la pestaña MUNDO (LAB).")
     st.dataframe(pd.DataFrame([{
         "Evento": e["evento"], "Magnitud": e["mag"], "b-value 14D": e["b_14d"],
         "Sismos": e["sismos_14d"], "InSAR": e["insar"], "EM": e["cond"], "SHOA": e["shoa"],
@@ -1713,16 +1786,25 @@ with tab_evidencia:
         with st.expander("Ver informe de validación"):
             st.text(informe_validacion)
 
-if tab_mundo is not None and mundo_lab:
+if tab_mundo is not None:
     with tab_mundo:
-        mundo_lab.render_mundo_lab(
-            admin_activo=admin_activo,
-            ttl_seg=ttl_seg,
-            ttl_horas=ttl_horas,
-            forzar=forzar_mundo,
-            modo_sat=modo_sat,
-            kp=kp,
-        )
+        if not mundo_lab:
+            st.error("Módulo MUNDO LAB no cargó en el servidor.")
+            st.code(_err_mundo or "nazca_mundo_lab.py no encontrado", language="text")
+            st.info("Sube `nazca_mundo_lab.py` a GitHub y haz Reboot en Streamlit Cloud.")
+        elif not getattr(mundo_lab, "MODULO_MUNDO_ACTIVO", False):
+            st.warning("MUNDO LAB desactivado (MODULO_MUNDO_ACTIVO = False).")
+        else:
+            mundo_lab.render_mundo_lab(
+                admin_activo=admin_activo,
+                ttl_seg=ttl_seg,
+                ttl_horas=ttl_horas,
+                nodo_sel=nodo_mundo_sel,
+                forzar=forzar_mundo,
+                modo_sat=modo_sat,
+                modo_demo=modo_demo,
+                kp=kp,
+            )
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")

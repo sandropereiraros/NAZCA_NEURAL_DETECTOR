@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import random
@@ -13,15 +14,30 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
-try:
-    import nazca_mundo_lab as mundo_lab
-except ImportError:
-    mundo_lab = None
+APP_BUILD = "2026-06-08-v4"
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _cargar_modulo_local(nombre, archivo):
+    ruta = os.path.join(_BASE_DIR, archivo)
+    if not os.path.exists(ruta):
+        return None, f"Falta archivo: {archivo}"
+    try:
+        spec = importlib.util.spec_from_file_location(nombre, ruta)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod, None
+    except Exception as exc:
+        return None, f"Error cargando {archivo}: {exc}"
+
+
+mundo_lab, _err_mundo = _cargar_modulo_local("nazca_mundo_lab", "nazca_mundo_lab.py")
+mapa_tect, _err_mapa = _cargar_modulo_local("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
 
 # ==============================================================================
 # CONFIGURACIÓN
 # ==============================================================================
-st.set_page_config(page_title="NAZCA CORE MONITOR v8.0", layout="wide")
+st.set_page_config(page_title=f"NAZCA CORE MONITOR v8.0 · {APP_BUILD}", layout="wide")
 
 PESOS = {"SISMO_BVAL": 0.62, "INSAR": 0.18, "CONDUCT": 0.10, "SHOA": 0.06, "ATMOS": 0.01}
 UMBRAL_CRITICO = 75.0
@@ -788,6 +804,148 @@ def distancia_km(lat1, lon1, lat2, lon2):
     return float(2 * radio_tierra * np.arcsin(np.sqrt(a)))
 
 
+# ==============================================================================
+# MUNDO LAB + MAPA TECTÓNICO INLINE (funciona aunque falten .py auxiliares en Cloud)
+# ==============================================================================
+_ANILLO_FUEGO_PATHS = [
+    {"path": [[-175, 51], [-165, 55], [-155, 59], [-145, 61], [-135, 58]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[155, 52], [148, 44], [143, 39], [139, 35]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[126, 8], [119, -1], [108, -9], [100, -13], [96, -15]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[176, -18], [179, -26], [-175, -34], [177, -42]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[-108, 16], [-98, 7], [-90, 1], [-84, -5]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[-132, 54], [-122, 42], [-115, 30]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[70, 28], [82, 31], [90, 33]], "color": [255, 200, 60, 210], "ancho": 3},
+]
+
+_CATALOGO_MUNDO = [
+    {"region": "Japón", "evento": "Tohoku 2011", "mag": "M9.0", "b_14d": 0.55, "sismos": 72, "insar": 98.0},
+    {"region": "Indonesia", "evento": "Aceh 2004", "mag": "M9.1", "b_14d": 0.54, "sismos": 78, "insar": 97.0},
+    {"region": "Alaska", "evento": "Alaska 1964", "mag": "M9.2", "b_14d": 0.52, "sismos": 58, "insar": 95.0},
+    {"region": "Filipinas", "evento": "Mindanao 2026", "mag": "M7.8", "b_14d": 0.67, "sismos": 31, "insar": 82.0},
+    {"region": "Filipinas", "evento": "Bohol 2013", "mag": "M7.2", "b_14d": 0.74, "sismos": 22, "insar": 71.0},
+    {"region": "Turquía", "evento": "Kahramanmaras 2023", "mag": "M7.8", "b_14d": 0.70, "sismos": 40, "insar": 72.0},
+    {"region": "Nepal", "evento": "Nepal 2015", "mag": "M7.8", "b_14d": 0.59, "sismos": 18, "insar": 92.0},
+    {"region": "Nueva Zelanda", "evento": "Kaikoura 2016", "mag": "M7.8", "b_14d": 0.69, "sismos": 44, "insar": 74.0},
+    {"region": "México", "evento": "Michoacán 1985", "mag": "M8.0", "b_14d": 0.61, "sismos": 47, "insar": 91.0},
+    {"region": "Perú", "evento": "Pisco 2007", "mag": "M8.0", "b_14d": 0.66, "sismos": 38, "insar": 88.0},
+    {"region": "California", "evento": "Ridgecrest 2019", "mag": "M7.1", "b_14d": 0.78, "sismos": 48, "insar": 65.0},
+    {"region": "Taiwán", "evento": "Ji-Ji 1999", "mag": "M7.7", "b_14d": 0.64, "sismos": 39, "insar": 85.0},
+    {"region": "Islandia", "evento": "Reykjanes 2024", "mag": "M6.8", "b_14d": 0.85, "sismos": 55, "insar": 55.0},
+]
+
+_NODOS_MUNDO_INLINE = {
+    "Filipinas · Mindanao": {"pais": "Filipinas", "lat": 6.20, "lon": 125.10},
+    "Japón · Tohoku": {"pais": "Japón", "lat": 38.25, "lon": 142.35},
+    "Indonesia · Sumatra": {"pais": "Indonesia", "lat": 3.30, "lon": 95.85},
+    "Turquía · Anatolia": {"pais": "Turquía", "lat": 37.20, "lon": 37.00},
+    "Nepal · Himalaya": {"pais": "Nepal", "lat": 28.15, "lon": 84.00},
+    "California · San Andreas": {"pais": "EE.UU.", "lat": 36.10, "lon": -120.30},
+    "Nueva Zelanda · Kaikoura": {"pais": "Nueva Zelanda", "lat": -42.40, "lon": 173.70},
+    "Islandia · Reykjanes": {"pais": "Islandia", "lat": 63.90, "lon": -22.50},
+}
+
+
+def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura=400):
+    if mapa_tect:
+        mapa_tect.render_mapa_tectonico(
+            df_sismos=df_sismos, estacion_lat=est_lat, estacion_lon=est_lon,
+            estacion_label=label, lat_center=est_lat, lon_center=est_lon,
+            zoom=zoom, altura=altura, mostrar_anillo=True,
+        )
+        st.caption(mapa_tect.leyenda_mapa_tectonico())
+        return
+    try:
+        import pydeck as pdk
+    except ImportError:
+        st.warning("Instala pydeck (requirements.txt) para ver el Anillo de Fuego.")
+        if not df_sismos.empty:
+            sm = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon"})
+            st.map(sm, latitude="lat", longitude="lon", zoom=zoom)
+        return
+    sismos = []
+    if df_sismos is not None and not df_sismos.empty:
+        for _, r in df_sismos.iterrows():
+            mag = float(r.get("Magnitud", r.get("mag", 4.5)))
+            sismos.append({
+                "lon": float(r["Longitud"] if "Longitud" in r else r["lon"]),
+                "lat": float(r["Latitud"] if "Latitud" in r else r["lat"]),
+                "mag": mag, "lugar": str(r.get("Lugar", "")),
+                "radio": (max(mag, 2.5) ** 2) * 1800,
+                "color": [239, 68, 68, 210] if mag >= 6 else [250, 204, 21, 200],
+                "label": "Sismo USGS",
+            })
+    capas = [pdk.Layer("PathLayer", data=_ANILLO_FUEGO_PATHS, get_path="path", get_color="color", get_width="ancho", width_min_pixels=2)]
+    if sismos:
+        capas.append(pdk.Layer("ScatterplotLayer", data=sismos, get_position=["lon", "lat"], get_radius="radio", get_fill_color="color", pickable=True))
+    if est_lat is not None:
+        capas.append(pdk.Layer("ScatterplotLayer", data=[{"lon": est_lon, "lat": est_lat, "radio": 28000, "color": [59, 130, 246, 255]}],
+                                 get_position=["lon", "lat"], get_radius="radio", get_fill_color="color"))
+    deck = pdk.Deck(
+        layers=capas,
+        initial_view_state=pdk.ViewState(latitude=est_lat or 10, longitude=est_lon or 120, zoom=zoom),
+        map_style="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+    )
+    st.pydeck_chart(deck, height=altura, use_container_width=True)
+    st.caption("🟠 Anillo de Fuego · 🔴 sismos USGS M6+ · 🟡 M4.5+ · 🔵 nodo activo")
+
+
+def _fetch_usgs_global_inline():
+    inicio = (ahora_chile() - timedelta(days=14)).strftime("%Y-%m-%d")
+    url = (
+        "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson"
+        f"&starttime={inicio}&minmagnitude=4.5&orderby=time&limit=500"
+    )
+    try:
+        res = requests.get(url, timeout=15)
+        if res.status_code == 200:
+            filas = []
+            for f in res.json().get("features", []):
+                p, c = f["properties"], f["geometry"]["coordinates"]
+                if -56 <= c[1] <= -17 and -76.5 <= c[0] <= -66:
+                    continue
+                filas.append({
+                    "Magnitud": float(p.get("mag") or 0), "Lugar": p.get("place", ""),
+                    "Latitud": c[1], "Longitud": c[0],
+                    "Fecha": timestamp_usgs_a_chile(p["time"]),
+                })
+            return pd.DataFrame(filas)
+    except requests.RequestException:
+        pass
+    return pd.DataFrame()
+
+
+def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
+    st.markdown("### 🌍 NAZCA MUNDO LAB (inline v4)")
+    st.success(f"Build **{APP_BUILD}** — Catálogo mundial SIN Chile (Maule/Iquique solo en pestaña nacional).")
+    if not admin_activo:
+        st.info("Ingresa PIN admin para operar el laboratorio mundial.")
+        return
+    nodo_sel = nodo_sel or "Filipinas · Mindanao"
+    if nodo_sel not in _NODOS_MUNDO_INLINE:
+        nodo_sel = "Filipinas · Mindanao"
+    nodo = _NODOS_MUNDO_INLINE[nodo_sel]
+    df_g = _fetch_usgs_global_inline()
+    st.metric("Sismos mundiales USGS M4.5+ (sin Chile)", len(df_g))
+    st.markdown("#### Terremotos históricos MUNDIALES (Japón, Filipinas, Indonesia…)")
+    st.dataframe(pd.DataFrame(_CATALOGO_MUNDO), use_container_width=True, hide_index=True)
+    st.markdown(f"#### Mapa — Anillo de Fuego + USGS · Nodo: **{nodo_sel}**")
+    _render_mapa_anillo_fuego(df_g, nodo["lat"], nodo["lon"], nodo_sel, zoom=2, altura=420)
+    if modo_demo:
+        st.error("MODO DEMO activo en laboratorio mundial.")
+
+
+def _render_mundo_lab_ui(admin_activo, ttl_seg, ttl_horas, nodo_sel, forzar, modo_sat, modo_demo, kp):
+    if mundo_lab and getattr(mundo_lab, "MODULO_MUNDO_ACTIVO", False):
+        mundo_lab.render_mundo_lab(
+            admin_activo=admin_activo, ttl_seg=ttl_seg, ttl_horas=ttl_horas,
+            nodo_sel=nodo_sel, forzar=forzar, modo_sat=modo_sat, modo_demo=modo_demo, kp=kp,
+        )
+    else:
+        if _err_mundo:
+            st.warning(f"Módulo externo no cargó ({_err_mundo}). Usando versión integrada en streamlit_app.py.")
+        _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo)
+
+
 def filtrar_sismos_estacion(df_sismos, lat, lon, radio_km=RADIO_ESTACION_KM):
     if df_sismos.empty:
         return df_sismos.copy()
@@ -1193,6 +1351,15 @@ admin_esperado = obtener_secret("ADMIN_PIN")
 admin_activo = bool(admin_esperado and admin_pin == admin_esperado)
 if admin_activo:
     st.sidebar.success("Modo admin activo.")
+    _ver_mundo = getattr(mundo_lab, "MUNDO_LAB_VERSION", None) if mundo_lab else None
+    st.sidebar.caption(
+        f"Build app: **{APP_BUILD}** · MUNDO: **{_ver_mundo or 'NO'}** · "
+        f"Mapa: **{'OK' if mapa_tect else 'NO'}**"
+    )
+    if _err_mundo:
+        st.sidebar.error(_err_mundo)
+    if _err_mapa:
+        st.sidebar.warning(_err_mapa)
 elif admin_pin:
     st.sidebar.warning("PIN admin incorrecto.")
 
@@ -1236,8 +1403,44 @@ if telegram_activo:
     else:
         st.sidebar.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en secrets.")
 
-estacion_sel = st.sidebar.selectbox("Estación", list(ESTACIONES_CONFIG.keys()), index=3)
-config = ESTACIONES_CONFIG[estacion_sel]
+_mundo_sidebar = bool(mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo)
+if _mundo_sidebar:
+    red_operativa = st.sidebar.radio(
+        "Red CORE NETWORK",
+        ["Chile Nacional", "Mundo LAB"],
+        horizontal=True,
+    )
+else:
+    red_operativa = "Chile Nacional"
+    nodo_mundo_sel = None
+
+_nodos_mundo = (
+    mundo_lab.listar_nodos_mundo() if _mundo_sidebar and mundo_lab
+    else list(_NODOS_MUNDO_INLINE.keys())
+)
+_default_mundo = (
+    mundo_lab.nodo_por_defecto() if _mundo_sidebar and mundo_lab
+    else "Filipinas · Mindanao"
+)
+if "nodo_mundo_sel" not in st.session_state and _default_mundo:
+    st.session_state["nodo_mundo_sel"] = _default_mundo
+
+if red_operativa == "Mundo LAB" and _mundo_sidebar:
+    nodo_mundo_sel = st.sidebar.selectbox(
+        "Nodo global CORE NETWORK",
+        _nodos_mundo,
+        index=_nodos_mundo.index(st.session_state.get("nodo_mundo_sel", _default_mundo)),
+    )
+    st.session_state["nodo_mundo_sel"] = nodo_mundo_sel
+    estacion_sel = list(ESTACIONES_CONFIG.keys())[3]
+    config = ESTACIONES_CONFIG[estacion_sel]
+    st.sidebar.caption(f"Red mundial activa · {nodo_mundo_sel}")
+else:
+    nodo_mundo_sel = st.session_state.get("nodo_mundo_sel", _default_mundo) if _mundo_sidebar else None
+    estacion_sel = st.sidebar.selectbox("Estación Chile", list(ESTACIONES_CONFIG.keys()), index=3)
+    config = ESTACIONES_CONFIG[estacion_sel]
+    if _mundo_sidebar:
+        st.sidebar.caption("Pestaña MUNDO (LAB) usa el último nodo global guardado.")
 
 st.sidebar.markdown("---")
 bitacora = leer_bitacora_bytes()
@@ -1344,7 +1547,16 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.caption(f"Enlace: **{canal}** | Caché APIs: **{intervalo}**")
+st.caption(
+    f"Build **{APP_BUILD}** | Enlace: **{canal}** | Caché APIs: **{intervalo}** | "
+    f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}**"
+)
+if not mundo_lab or not mapa_tect:
+    st.warning(
+        "Deploy incompleto en el servidor. Deben existir en GitHub: "
+        "`nazca_mundo_lab.py`, `nazca_mapa_tectonico.py` y `pydeck` en requirements.txt. "
+        "Luego Reboot en Streamlit Cloud."
+    )
 
 if api_nueva:
     st.success("Datos actualizados desde USGS / NOAA")
@@ -1359,8 +1571,7 @@ _tab_labels = [
     "SUSCRIPCIÓN TELEGRAM",
     "EVIDENCIA Y VALIDACIÓN",
 ]
-if mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo:
-    _tab_labels.append("MUNDO (LAB)")
+_tab_labels.append("MUNDO (LAB)")
 _tabs = st.tabs(_tab_labels)
 tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = _tabs[:6]
 tab_mundo = _tabs[6] if len(_tabs) > 6 else None
@@ -1453,20 +1664,10 @@ with tab_vivo:
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        st.markdown("#### Mapa sísmico regional")
-        mapa_df = pd.DataFrame([{
-            "lat": config["lat"],
-            "lon": config["lon"],
-            "size": 160,
-            "color": "#f97316" if nodo_offline else "#3b82f6",
-        }])
-        if not df_sismos.empty:
-            sismos_mapa = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
-            sismos_mapa = sismos_mapa[["lat", "lon", "mag"]].copy()
-            sismos_mapa["size"] = (sismos_mapa["mag"].clip(lower=2.5) ** 2) * 12
-            sismos_mapa["color"] = np.where(sismos_mapa["mag"] >= 4.0, "#ef4444", "#facc15")
-            mapa_df = pd.concat([mapa_df, sismos_mapa[["lat", "lon", "size", "color"]]], ignore_index=True)
-        st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=4)
+        st.markdown("#### Mapa sísmico regional + Anillo de Fuego")
+        _render_mapa_anillo_fuego(
+            df_sismos, config["lat"], config["lon"], estacion_sel, zoom=4, altura=400,
+        )
 
     with col_tabla:
         st.caption(
@@ -1494,7 +1695,8 @@ with tab_vivo:
         )
 
 with tab_hist:
-    st.markdown("### Referencia y Match vs terremotos M7+ (14D pre-sismo)")
+    st.markdown("### Referencia histórica CHILE — Match vs terremotos M7+ (14D pre-sismo)")
+    st.caption("Solo eventos nacionales. Terremotos mundiales están en la pestaña MUNDO (LAB).")
     st.dataframe(pd.DataFrame([{
         "Evento": e["evento"], "Magnitud": e["mag"], "b-value 14D": e["b_14d"],
         "Sismos": e["sismos_14d"], "InSAR": e["insar"], "EM": e["cond"], "SHOA": e["shoa"],
@@ -1713,15 +1915,11 @@ with tab_evidencia:
         with st.expander("Ver informe de validación"):
             st.text(informe_validacion)
 
-if tab_mundo is not None and mundo_lab:
+if tab_mundo is not None:
     with tab_mundo:
-        mundo_lab.render_mundo_lab(
-            admin_activo=admin_activo,
-            ttl_seg=ttl_seg,
-            ttl_horas=ttl_horas,
-            forzar=forzar_mundo,
-            modo_sat=modo_sat,
-            kp=kp,
+        _render_mundo_lab_ui(
+            admin_activo, ttl_seg, ttl_horas, nodo_mundo_sel,
+            forzar_mundo, modo_sat, modo_demo, kp,
         )
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")

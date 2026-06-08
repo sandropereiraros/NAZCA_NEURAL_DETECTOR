@@ -16,10 +16,16 @@ import pandas as pd
 import requests
 import streamlit as st
 
+try:
+    import nazca_mapa_tectonico as mapa_tect
+except ImportError:
+    mapa_tect = None
+
 # ==============================================================================
 # INTERRUPTOR GLOBAL — False = Chile sigue igual, pestaña MUNDO no aparece
 # ==============================================================================
 MODULO_MUNDO_ACTIVO = True
+MUNDO_LAB_VERSION = "v4.0-sin-chile"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, ".nazca_cache")
@@ -45,83 +51,144 @@ TIPO_FALLA_INFO = {
     "complejo": "Múltiples placas; patrones locales, no transferir desde Chile.",
 }
 
+TELEMETRIA_POR_TIPO = {
+    "subduccion": {"insar_base": 40.0, "insar_gain": 3.8, "shoa_scale": 1.4, "cond_amp": 0.75, "mag_enjambre": 4.8},
+    "transformante": {"insar_base": 34.0, "insar_gain": 2.6, "shoa_scale": 0.4, "cond_amp": 0.55, "mag_enjambre": 4.2},
+    "divergente": {"insar_base": 30.0, "insar_gain": 2.2, "shoa_scale": 0.2, "cond_amp": 0.45, "mag_enjambre": 3.8},
+    "colision": {"insar_base": 38.0, "insar_gain": 3.2, "shoa_scale": 0.3, "cond_amp": 0.65, "mag_enjambre": 4.0},
+    "complejo": {"insar_base": 36.0, "insar_gain": 3.0, "shoa_scale": 0.9, "cond_amp": 0.60, "mag_enjambre": 4.5},
+}
+
+# Sin Chile — el módulo nacional ya cubre Nazca/Sudamérica.
 NODOS_MUNDO_CONFIG = {
-    "Chile · Nazca (subducción)": {
-        "tipo_falla": "subduccion", "pais": "Chile", "lat": -33.04, "lon": -71.61,
-        "radio_km": 350, "umbral_critico": 75.0,
-        "baseline_cond": 4.1, "sigma_cond": 0.15, "baseline_pres": 1013.25,
-    },
     "Perú · Lima-Nazca (subducción)": {
         "tipo_falla": "subduccion", "pais": "Perú", "lat": -12.05, "lon": -77.05,
-        "radio_km": 400, "umbral_critico": 74.0,
+        "radio_km": 400, "umbral_critico": 74.0, "mag_min_local": 4.0,
         "baseline_cond": 3.9, "sigma_cond": 0.18, "baseline_pres": 1011.0,
     },
     "Japón · Tohoku (subducción)": {
         "tipo_falla": "subduccion", "pais": "Japón", "lat": 38.25, "lon": 142.35,
-        "radio_km": 450, "umbral_critico": 76.0,
+        "radio_km": 450, "umbral_critico": 76.0, "mag_min_local": 4.0,
         "baseline_cond": 4.2, "sigma_cond": 0.14, "baseline_pres": 1012.5,
+    },
+    "Indonesia · Sumatra (subducción)": {
+        "tipo_falla": "subduccion", "pais": "Indonesia", "lat": 3.30, "lon": 95.85,
+        "radio_km": 480, "umbral_critico": 77.0, "mag_min_local": 4.2,
+        "baseline_cond": 4.1, "sigma_cond": 0.16, "baseline_pres": 1010.5,
+    },
+    "Alaska · Aleutianas (subducción)": {
+        "tipo_falla": "subduccion", "pais": "EE.UU.", "lat": 61.50, "lon": -150.00,
+        "radio_km": 500, "umbral_critico": 75.0, "mag_min_local": 4.0,
+        "baseline_cond": 3.7, "sigma_cond": 0.20, "baseline_pres": 1008.0,
+    },
+    "México · Guerrero (subducción)": {
+        "tipo_falla": "subduccion", "pais": "México", "lat": 17.50, "lon": -101.50,
+        "radio_km": 420, "umbral_critico": 74.0, "mag_min_local": 4.0,
+        "baseline_cond": 4.0, "sigma_cond": 0.17, "baseline_pres": 1011.8,
     },
     "Filipinas · Mindanao (complejo)": {
         "tipo_falla": "complejo", "pais": "Filipinas", "lat": 6.20, "lon": 125.10,
-        "radio_km": 380, "umbral_critico": 73.0,
+        "radio_km": 380, "umbral_critico": 73.0, "mag_min_local": 4.2,
         "baseline_cond": 4.0, "sigma_cond": 0.20, "baseline_pres": 1010.8,
+    },
+    "Taiwán · Ryukyu (complejo)": {
+        "tipo_falla": "complejo", "pais": "Taiwán", "lat": 23.80, "lon": 121.20,
+        "radio_km": 360, "umbral_critico": 73.0, "mag_min_local": 4.0,
+        "baseline_cond": 4.1, "sigma_cond": 0.19, "baseline_pres": 1011.5,
+    },
+    "Grecia · Egeo (complejo)": {
+        "tipo_falla": "complejo", "pais": "Grecia", "lat": 37.50, "lon": 25.20,
+        "radio_km": 320, "umbral_critico": 71.0, "mag_min_local": 4.0,
+        "baseline_cond": 3.9, "sigma_cond": 0.21, "baseline_pres": 1012.0,
     },
     "California · San Andreas (transformante)": {
         "tipo_falla": "transformante", "pais": "EE.UU.", "lat": 36.10, "lon": -120.30,
-        "radio_km": 320, "umbral_critico": 72.0,
+        "radio_km": 320, "umbral_critico": 72.0, "mag_min_local": 3.8,
         "baseline_cond": 3.6, "sigma_cond": 0.22, "baseline_pres": 1014.0,
     },
     "Turquía · Anatolia (transformante)": {
         "tipo_falla": "transformante", "pais": "Turquía", "lat": 37.20, "lon": 37.00,
-        "radio_km": 350, "umbral_critico": 72.0,
+        "radio_km": 350, "umbral_critico": 72.0, "mag_min_local": 4.0,
         "baseline_cond": 3.8, "sigma_cond": 0.20, "baseline_pres": 1011.2,
+    },
+    "Nueva Zelanda · Kaikoura (transformante)": {
+        "tipo_falla": "transformante", "pais": "Nueva Zelanda", "lat": -42.40, "lon": 173.70,
+        "radio_km": 340, "umbral_critico": 72.0, "mag_min_local": 4.0,
+        "baseline_cond": 3.7, "sigma_cond": 0.21, "baseline_pres": 1010.5,
     },
     "Islandia · Reykjanes (divergente)": {
         "tipo_falla": "divergente", "pais": "Islandia", "lat": 63.90, "lon": -22.50,
-        "radio_km": 280, "umbral_critico": 70.0,
+        "radio_km": 280, "umbral_critico": 70.0, "mag_min_local": 3.5,
         "baseline_cond": 3.4, "sigma_cond": 0.28, "baseline_pres": 1008.5,
     },
     "Rift Africano · Afar (divergente)": {
         "tipo_falla": "divergente", "pais": "Etiopía", "lat": 11.60, "lon": 41.00,
-        "radio_km": 300, "umbral_critico": 68.0,
+        "radio_km": 300, "umbral_critico": 68.0, "mag_min_local": 3.5,
         "baseline_cond": 3.5, "sigma_cond": 0.25, "baseline_pres": 1009.0,
     },
     "Himalaya · Nepal (colisión)": {
         "tipo_falla": "colision", "pais": "Nepal", "lat": 28.15, "lon": 84.00,
-        "radio_km": 500, "umbral_critico": 74.0,
+        "radio_km": 500, "umbral_critico": 74.0, "mag_min_local": 4.2,
         "baseline_cond": 4.3, "sigma_cond": 0.16, "baseline_pres": 1010.0,
     },
 }
 
 EVENTOS_REF_MUNDO = {
-    "Chile · Nazca (subducción)": [
-        {"evento": "Maule 2010", "mag": "M8.8", "b_14d": 0.62, "sismos_14d": 52, "insar": 96.2, "cond": 4.8, "shoa": 150.0},
-        {"evento": "Iquique 2014", "mag": "M8.2", "b_14d": 0.58, "sismos_14d": 61, "insar": 91.8, "cond": 4.5, "shoa": 8.0},
-        {"evento": "Illapel 2015", "mag": "M8.3", "b_14d": 0.64, "sismos_14d": 44, "insar": 94.0, "cond": 4.2, "shoa": 5.0},
-    ],
     "Perú · Lima-Nazca (subducción)": [
         {"evento": "Pisco 2007", "mag": "M8.0", "b_14d": 0.66, "sismos_14d": 38, "insar": 88.0, "cond": 4.3, "shoa": 12.0},
         {"evento": "Lima 1974", "mag": "M8.1", "b_14d": 0.60, "sismos_14d": 45, "insar": 90.5, "cond": 4.6, "shoa": 9.0},
+        {"evento": "Chimbote 1970", "mag": "M7.9", "b_14d": 0.63, "sismos_14d": 41, "insar": 87.0, "cond": 4.4, "shoa": 10.0},
     ],
     "Japón · Tohoku (subducción)": [
         {"evento": "Tohoku 2011", "mag": "M9.0", "b_14d": 0.55, "sismos_14d": 72, "insar": 98.0, "cond": 5.1, "shoa": 180.0},
         {"evento": "Kumamoto 2016", "mag": "M7.3", "b_14d": 0.72, "sismos_14d": 34, "insar": 78.0, "cond": 4.0, "shoa": 3.0},
+        {"evento": "Hokkaido 2018", "mag": "M6.7", "b_14d": 0.69, "sismos_14d": 29, "insar": 74.0, "cond": 3.9, "shoa": 2.5},
+    ],
+    "Indonesia · Sumatra (subducción)": [
+        {"evento": "Aceh 2004", "mag": "M9.1", "b_14d": 0.54, "sismos_14d": 78, "insar": 97.0, "cond": 5.0, "shoa": 220.0},
+        {"evento": "Nias 2005", "mag": "M8.6", "b_14d": 0.57, "sismos_14d": 65, "insar": 93.0, "cond": 4.7, "shoa": 45.0},
+        {"evento": "Padang 2009", "mag": "M7.6", "b_14d": 0.65, "sismos_14d": 36, "insar": 84.0, "cond": 4.2, "shoa": 8.0},
+    ],
+    "Alaska · Aleutianas (subducción)": [
+        {"evento": "Alaska 1964", "mag": "M9.2", "b_14d": 0.52, "sismos_14d": 58, "insar": 95.0, "cond": 4.9, "shoa": 160.0},
+        {"evento": "Rat Islands 1965", "mag": "M8.7", "b_14d": 0.58, "sismos_14d": 42, "insar": 89.0, "cond": 4.4, "shoa": 22.0},
+    ],
+    "México · Guerrero (subducción)": [
+        {"evento": "Michoacán 1985", "mag": "M8.0", "b_14d": 0.61, "sismos_14d": 47, "insar": 91.0, "cond": 4.5, "shoa": 6.0},
+        {"evento": "Puebla 2017", "mag": "M7.1", "b_14d": 0.70, "sismos_14d": 33, "insar": 79.0, "cond": 4.1, "shoa": 3.5},
+        {"evento": "Guerrero 2014", "mag": "M7.2", "b_14d": 0.68, "sismos_14d": 30, "insar": 76.0, "cond": 4.0, "shoa": 4.0},
     ],
     "Filipinas · Mindanao (complejo)": [
         {"evento": "Mindanao 2026", "mag": "M7.8", "b_14d": 0.67, "sismos_14d": 31, "insar": 82.0, "cond": 4.1, "shoa": 14.0},
         {"evento": "Bohol 2013", "mag": "M7.2", "b_14d": 0.74, "sismos_14d": 22, "insar": 71.0, "cond": 3.9, "shoa": 5.0},
+        {"evento": "Leyte 2017", "mag": "M6.5", "b_14d": 0.76, "sismos_14d": 27, "insar": 68.0, "cond": 3.8, "shoa": 4.5},
+    ],
+    "Taiwán · Ryukyu (complejo)": [
+        {"evento": "Hualien 2018", "mag": "M6.4", "b_14d": 0.73, "sismos_14d": 25, "insar": 70.0, "cond": 4.0, "shoa": 6.0},
+        {"evento": "Ji-Ji 1999", "mag": "M7.7", "b_14d": 0.64, "sismos_14d": 39, "insar": 85.0, "cond": 4.3, "shoa": 7.0},
+    ],
+    "Grecia · Egeo (complejo)": [
+        {"evento": "Santorini 1956", "mag": "M7.7", "b_14d": 0.71, "sismos_14d": 28, "insar": 73.0, "cond": 3.9, "shoa": 5.0},
+        {"evento": "Kos 2017", "mag": "M6.6", "b_14d": 0.77, "sismos_14d": 24, "insar": 66.0, "cond": 3.7, "shoa": 3.0},
     ],
     "California · San Andreas (transformante)": [
         {"evento": "Ridgecrest 2019", "mag": "M7.1", "b_14d": 0.78, "sismos_14d": 48, "insar": 65.0, "cond": 3.8, "shoa": 2.0},
         {"evento": "Loma Prieta 1989", "mag": "M6.9", "b_14d": 0.82, "sismos_14d": 26, "insar": 58.0, "cond": 3.5, "shoa": 1.5},
+        {"evento": "San Fernando 1971", "mag": "M6.6", "b_14d": 0.80, "sismos_14d": 22, "insar": 55.0, "cond": 3.4, "shoa": 1.2},
     ],
     "Turquía · Anatolia (transformante)": [
         {"evento": "Kahramanmaras 2023", "mag": "M7.8", "b_14d": 0.70, "sismos_14d": 40, "insar": 72.0, "cond": 4.0, "shoa": 2.5},
         {"evento": "Izmit 1999", "mag": "M7.6", "b_14d": 0.68, "sismos_14d": 35, "insar": 75.0, "cond": 4.2, "shoa": 3.0},
+        {"evento": "Van 2011", "mag": "M7.1", "b_14d": 0.72, "sismos_14d": 28, "insar": 68.0, "cond": 3.9, "shoa": 2.0},
+    ],
+    "Nueva Zelanda · Kaikoura (transformante)": [
+        {"evento": "Kaikoura 2016", "mag": "M7.8", "b_14d": 0.69, "sismos_14d": 44, "insar": 74.0, "cond": 3.9, "shoa": 2.8},
+        {"evento": "Christchurch 2011", "mag": "M6.2", "b_14d": 0.81, "sismos_14d": 36, "insar": 60.0, "cond": 3.6, "shoa": 1.0},
     ],
     "Islandia · Reykjanes (divergente)": [
         {"evento": "Reykjanes 2024", "mag": "M6.8", "b_14d": 0.85, "sismos_14d": 55, "insar": 55.0, "cond": 3.2, "shoa": 0.8},
         {"evento": "Grindavik enjambre", "mag": "M5.6", "b_14d": 0.90, "sismos_14d": 68, "insar": 48.0, "cond": 3.0, "shoa": 0.5},
+        {"evento": "Bárðarbunga 2014", "mag": "M5.4", "b_14d": 0.93, "sismos_14d": 72, "insar": 42.0, "cond": 2.9, "shoa": 0.3},
     ],
     "Rift Africano · Afar (divergente)": [
         {"evento": "Afar 2005", "mag": "M6.2", "b_14d": 0.88, "sismos_14d": 42, "insar": 52.0, "cond": 3.3, "shoa": 0.3},
@@ -130,6 +197,7 @@ EVENTOS_REF_MUNDO = {
     "Himalaya · Nepal (colisión)": [
         {"evento": "Nepal 2015", "mag": "M7.8", "b_14d": 0.59, "sismos_14d": 18, "insar": 92.0, "cond": 4.5, "shoa": 1.0},
         {"evento": "Sikkim 2011", "mag": "M6.9", "b_14d": 0.63, "sismos_14d": 14, "insar": 86.0, "cond": 4.3, "shoa": 0.8},
+        {"evento": "Kashmir 2005", "mag": "M7.6", "b_14d": 0.61, "sismos_14d": 16, "insar": 89.0, "cond": 4.4, "shoa": 0.9},
     ],
 }
 
@@ -140,6 +208,69 @@ COMPUERTA_POR_TIPO = {
     "colision": {"insar_min": 45.0, "sismos_min": 1, "b_critico": 0.60},
     "complejo": {"insar_min": 45.0, "sismos_min": 2, "b_critico": 0.68},
 }
+
+
+def listar_nodos_mundo():
+    return list(NODOS_MUNDO_CONFIG.keys())
+
+
+def nodo_por_defecto():
+    return "Filipinas · Mindanao (complejo)"
+
+
+def catalogo_referencia_mundial(nodo_activo=None):
+    filas = []
+    for nodo, eventos in EVENTOS_REF_MUNDO.items():
+        cfg = NODOS_MUNDO_CONFIG.get(nodo, {})
+        for ev in eventos:
+            filas.append({
+                "Región nodal": nodo,
+                "País": cfg.get("pais", ""),
+                "Tipo falla": cfg.get("tipo_falla", ""),
+                "Evento": ev["evento"],
+                "Magnitud": ev["mag"],
+                "b-value 14D": ev["b_14d"],
+                "Sismos 14D": ev["sismos_14d"],
+                "InSAR %": ev["insar"],
+                "EM ref.": ev["cond"],
+                "Marea/SHOA": ev["shoa"],
+                "Nodo activo": "◉" if nodo == nodo_activo else "",
+            })
+    df = pd.DataFrame(filas)
+    if nodo_activo and not df.empty:
+        df = df.sort_values(
+            by=["Nodo activo", "Región nodal", "Magnitud"],
+            ascending=[False, True, False],
+        )
+    return df
+
+
+def referencia_nodo_activo(nodo):
+    eventos = EVENTOS_REF_MUNDO.get(nodo, [])
+    cfg = NODOS_MUNDO_CONFIG.get(nodo, {})
+    if not eventos:
+        return pd.DataFrame()
+    return pd.DataFrame([{
+        "País": cfg.get("pais", ""),
+        "Evento": e["evento"],
+        "Magnitud": e["mag"],
+        "b-value 14D": e["b_14d"],
+        "Sismos 14D": e["sismos_14d"],
+        "InSAR %": e["insar"],
+        "EM ref.": e["cond"],
+        "Marea/SHOA": e["shoa"],
+    } for e in eventos])
+
+
+def filtrar_eventos_fuera_chile(df_sismos):
+    if df_sismos.empty:
+        return df_sismos.copy()
+    df = df_sismos.copy()
+    en_chile = (
+        (df["Latitud"] >= -56.0) & (df["Latitud"] <= -17.0)
+        & (df["Longitud"] >= -76.5) & (df["Longitud"] <= -66.0)
+    )
+    return df[~en_chile].copy()
 
 
 # ==============================================================================
@@ -267,23 +398,31 @@ def filtrar_sismos_nodo(df_sismos, lat, lon, radio_km):
     return df[df["Distancia_km"] <= radio_km].sort_values("Fecha", ascending=False)
 
 
-def telemetria_nodo(nodo, config, total_sismos, ttl_seg, modo_sat):
+def telemetria_nodo(nodo, config, total_sismos, ttl_seg, modo_sat, modo_demo=False):
+    tipo = config.get("tipo_falla", "subduccion")
+    perfil = TELEMETRIA_POR_TIPO.get(tipo, TELEMETRIA_POR_TIPO["subduccion"])
     bloque = int(ahora_chile().timestamp() // ttl_seg)
-    rng = random.Random(hash((nodo, bloque, modo_sat)))
+    rng = random.Random(hash((nodo, bloque, modo_sat, modo_demo, tipo)))
+
+    ganancia = perfil["insar_gain"] * (1.35 if modo_demo else 1.0)
+    base = perfil["insar_base"] + (18.0 if modo_demo else 0.0)
+    insar = round(base + min(total_sismos * ganancia, 52.0) + rng.uniform(-2.5, 2.5), 1)
+
+    cond_amp = perfil["cond_amp"] * (1.4 if modo_demo else 1.0)
+    cond = round(config["baseline_cond"] + rng.uniform(-0.15, cond_amp), 2)
+    shoa_max = 18.0 * perfil["shoa_scale"] * (1.5 if modo_demo else 1.0)
+    shoa = round(rng.uniform(0.1, max(0.5, shoa_max)), 2)
+    pres = round(config["baseline_pres"] + rng.uniform(-1.2, 1.2), 2)
+    termico = round(rng.uniform(0.3, 2.8 if modo_demo else 2.2), 2)
+
     if modo_sat:
-        insar = round(55.0 + min(total_sismos * 3.0, 35.0) + rng.uniform(-2, 2), 1)
-        cond = round(config["baseline_cond"] + rng.uniform(0.1, 0.6), 2)
-        shoa = round(rng.uniform(0.5, 4.0), 2)
-        pres = round(config["baseline_pres"] + rng.uniform(-1.0, 1.0), 2)
-        termico = round(rng.uniform(0.5, 2.0), 2)
+        insar = round(min(insar + 8.0, 98.0), 1)
+        cond = round(cond + 0.25, 2)
         origen = "SAT MUNDO LAB"
+    elif modo_demo:
+        origen = "DEMO MUNDO LAB"
     else:
-        insar = round(40.0 + min(total_sismos * 3.5, 50.0) + rng.uniform(-2, 2), 1)
-        cond = round(config["baseline_cond"] + rng.uniform(-0.2, 0.8), 2)
-        shoa = round(rng.uniform(0.2, 8.0), 2)
-        pres = round(config["baseline_pres"] + rng.uniform(-1.5, 1.5), 2)
-        termico = round(rng.uniform(0.2, 2.5), 2)
-        origen = "LAB ESTIMADO"
+        origen = f"LAB {tipo.upper()}"
     return shoa, cond, pres, termico, insar, origen
 
 
@@ -341,7 +480,8 @@ def comparar_referencia_regional(nodo, insar, total_sismos, b_val, cond, shoa):
             1,
         )
         filas.append({
-            "Evento ref.": ev["evento"], "Magnitud": ev["mag"],
+            "Evento ref.": ev["evento"],
+            "Magnitud": ev["mag"],
             "Match %": match,
             "Estado": "🔴 ALTO" if match >= 75 else ("🟠 MEDIO" if match >= 60 else "🟢 BAJO"),
         })
@@ -440,13 +580,15 @@ def evaluar_coincidencias_mundo(df_evidencia, df_eventos, radio_km=400, horas_pr
     return pd.DataFrame(filas).sort_values(["Fecha evento", "Anticipación h"], ascending=[False, True]) if filas else pd.DataFrame()
 
 
-def construir_calibracion_mundo(df_global, ttl_seg, modo_sat, kp, consultado_usgs):
+def construir_calibracion_mundo(df_global, ttl_seg, modo_sat, kp, consultado_usgs, modo_demo=False):
     filas = []
     for nodo, cfg in NODOS_MUNDO_CONFIG.items():
         df_local = filtrar_sismos_nodo(df_global, cfg["lat"], cfg["lon"], cfg["radio_km"])
         total = len(df_local)
         b_val = calcular_b_value(df_local)
-        shoa, cond, pres, termico, insar, origen = telemetria_nodo(nodo, cfg, total, ttl_seg, modo_sat)
+        shoa, cond, pres, termico, insar, origen = telemetria_nodo(
+            nodo, cfg, total, ttl_seg, modo_sat, modo_demo=modo_demo,
+        )
         tipo = cfg["tipo_falla"]
         estado, icono, puntaje, log = calcular_riesgo_regional(
             insar, total, b_val, cond, shoa, cfg, kp, termico, pres, tipo,
@@ -471,12 +613,16 @@ def construir_calibracion_mundo(df_global, ttl_seg, modo_sat, kp, consultado_usg
     return pd.DataFrame(filas)
 
 
-def procesar_nodo(nodo, config, df_global, ttl_seg, modo_sat, kp):
-    df_local = filtrar_sismos_nodo(df_global, config["lat"], config["lon"], config["radio_km"])
+def procesar_nodo(nodo, config, df_global, ttl_seg, modo_sat, kp, modo_demo=False):
+    mag_min = config.get("mag_min_local", MAG_MIN_GLOBAL)
+    df_zona = df_global[df_global["Magnitud"] >= mag_min] if not df_global.empty else df_global
+    df_local = filtrar_sismos_nodo(df_zona, config["lat"], config["lon"], config["radio_km"])
     total_local = len(df_local)
     total_global = len(df_global)
     b_val = calcular_b_value(df_local)
-    shoa, cond, pres, termico, insar, origen = telemetria_nodo(nodo, config, total_local, ttl_seg, modo_sat)
+    shoa, cond, pres, termico, insar, origen = telemetria_nodo(
+        nodo, config, total_local, ttl_seg, modo_sat, modo_demo=modo_demo,
+    )
     tipo = config["tipo_falla"]
     estado, icono, puntaje, log_filtro = calcular_riesgo_regional(
         insar, total_local, b_val, cond, shoa, config, kp, termico, pres, tipo,
@@ -499,7 +645,10 @@ def procesar_nodo(nodo, config, df_global, ttl_seg, modo_sat, kp):
 # ==============================================================================
 # UI — solo admin
 # ==============================================================================
-def render_mundo_lab(admin_activo, ttl_seg, ttl_horas, forzar=False, modo_sat=False, kp=0):
+def render_mundo_lab(
+    admin_activo, ttl_seg, ttl_horas, nodo_sel=None,
+    forzar=False, modo_sat=False, modo_demo=False, kp=0,
+):
     if not MODULO_MUNDO_ACTIVO:
         return
 
@@ -509,31 +658,51 @@ def render_mundo_lab(admin_activo, ttl_seg, ttl_horas, forzar=False, modo_sat=Fa
 
     st.markdown("### 🌍 NAZCA MUNDO LAB — Calibración multi-placa")
     st.caption(
-        f"Hora sistema: **{ahora_chile().strftime('%Y-%m-%d %H:%M:%S')}** ({CHILE_TZ_LABEL}) · "
-        "Estudio privado · No es alerta oficial · Módulo desmontable"
+        f"Build **{MUNDO_LAB_VERSION}** · Hora: **{ahora_chile().strftime('%Y-%m-%d %H:%M:%S')}** ({CHILE_TZ_LABEL}) · "
+        "Solo terremotos mundiales · Chile está en pestañas nacionales"
     )
-    st.warning(
-        "Laboratorio experimental: parámetros ajustados por tipo de falla tectónica. "
-        "Sirve para comparar variantes y mejorar la puntería del módulo nacional Chile."
+    st.success(
+        "Esta pestaña NO usa Maule, Iquique ni Illapel. "
+        "Referencias: Japón, Filipinas, Indonesia, Alaska, Turquía, Nepal y más."
     )
+    if modo_demo:
+        st.error("MODO DEMO MUNDO — telemetría amplificada para prueba de respuesta LAB.")
 
     df_global, consultado_usgs, api_nueva = sismos_global_cacheados(ttl_seg, forzar=forzar)
+    df_global = filtrar_eventos_fuera_chile(df_global)
     if api_nueva:
         st.success(f"USGS global M{MAG_MIN_GLOBAL}+ actualizado.")
     else:
         st.info(f"📦 Caché MUNDO — USGS global: {consultado_usgs} | ventana {VENTANA_DIAS}D")
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Sismos globales M4.5+", len(df_global))
-    m2.metric("Nodos LAB", len(NODOS_MUNDO_CONFIG))
+    m1.metric("Sismos mundiales M4.5+ (sin Chile)", len(df_global))
+    m2.metric("Nodos CORE NETWORK", len(NODOS_MUNDO_CONFIG))
     m3.metric("Caché APIs", f"{ttl_horas} h")
 
-    nodo_sel = st.selectbox("Nodo de estudio", list(NODOS_MUNDO_CONFIG.keys()))
+    nodo_sel = nodo_sel or nodo_por_defecto()
+    if nodo_sel not in NODOS_MUNDO_CONFIG:
+        nodo_sel = nodo_por_defecto()
     config = NODOS_MUNDO_CONFIG[nodo_sel]
     tipo = config["tipo_falla"]
-    st.caption(f"**{config['pais']}** · Tipo: **{tipo}** · {TIPO_FALLA_INFO.get(tipo, '')}")
+    st.info(
+        f"**Nodo activo:** {nodo_sel} · **País:** {config['pais']} · "
+        f"**Tipo falla:** {tipo} · {TIPO_FALLA_INFO.get(tipo, '')}"
+    )
 
-    res = procesar_nodo(nodo_sel, config, df_global, ttl_seg, modo_sat, kp)
+    st.markdown("#### Terremotos históricos mundiales (todas las regiones, sin Chile)")
+    st.caption(
+        "Catálogo de referencia donde ocurrieron los grandes sismos del planeta. "
+        "La columna ◉ marca el nodo seleccionado en CORE NETWORK."
+    )
+    st.dataframe(
+        catalogo_referencia_mundial(nodo_activo=nodo_sel),
+        use_container_width=True,
+        hide_index=True,
+        height=280,
+    )
+
+    res = procesar_nodo(nodo_sel, config, df_global, ttl_seg, modo_sat, kp, modo_demo=modo_demo)
     bloque = int(ahora_chile().timestamp() // ttl_seg)
 
     clave_ev = (
@@ -581,18 +750,29 @@ def render_mundo_lab(admin_activo, ttl_seg, ttl_horas, forzar=False, modo_sat=Fa
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        st.markdown("#### Mapa global — nodo seleccionado")
-        mapa_df = pd.DataFrame([{
-            "lat": config["lat"], "lon": config["lon"],
-            "size": 200, "color": "#3b82f6",
-        }])
-        if not res["df_local"].empty:
-            sm = res["df_local"].rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
-            sm = sm[["lat", "lon", "mag"]].copy()
-            sm["size"] = (sm["mag"].clip(lower=4.0) ** 2) * 14
-            sm["color"] = np.where(sm["mag"] >= 6.0, "#ef4444", "#facc15")
-            mapa_df = pd.concat([mapa_df, sm[["lat", "lon", "size", "color"]]], ignore_index=True)
-        st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=3)
+        st.markdown("#### Mapa global — Anillo de Fuego + sismos USGS")
+        if mapa_tect:
+            mapa_tect.render_mapa_tectonico(
+                df_sismos=df_global,
+                estacion_lat=config["lat"],
+                estacion_lon=config["lon"],
+                estacion_label=nodo_sel,
+                estacion_color_rgb=[59, 130, 246, 255],
+                lat_center=config["lat"],
+                lon_center=config["lon"],
+                zoom=2,
+                altura=420,
+                mostrar_anillo=True,
+            )
+            st.caption(mapa_tect.leyenda_mapa_tectonico())
+        else:
+            mapa_df = pd.DataFrame([{"lat": config["lat"], "lon": config["lon"], "size": 200, "color": "#3b82f6"}])
+            if not res["df_local"].empty:
+                sm = res["df_local"].rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
+                sm["size"] = (sm["mag"].clip(lower=4.0) ** 2) * 14
+                sm["color"] = np.where(sm["mag"] >= 6.0, "#ef4444", "#facc15")
+                mapa_df = pd.concat([mapa_df, sm[["lat", "lon", "size", "color"]]], ignore_index=True)
+            st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=3)
 
     with col_tabla:
         st.caption(
@@ -605,17 +785,20 @@ def render_mundo_lab(admin_activo, ttl_seg, ttl_horas, forzar=False, modo_sat=Fa
             height=220, use_container_width=True,
         )
 
-    st.markdown("#### Referencia histórica regional")
-    refs = EVENTOS_REF_MUNDO.get(nodo_sel, [])
-    if refs:
-        st.dataframe(pd.DataFrame([{
-            "Evento": e["evento"], "Mag": e["mag"], "b 14D": e["b_14d"],
-            "Sismos": e["sismos_14d"], "InSAR": e["insar"],
-        } for e in refs]), use_container_width=True, hide_index=True)
-    st.dataframe(res["df_match"], use_container_width=True, hide_index=True)
+    st.markdown(f"#### Referencia del nodo activo: {config['pais']}")
+    df_ref_nodo = referencia_nodo_activo(nodo_sel)
+    if not df_ref_nodo.empty:
+        st.dataframe(df_ref_nodo, use_container_width=True, hide_index=True)
 
-    st.markdown("#### Calibración todos los nodos")
-    df_cal = construir_calibracion_mundo(df_global, ttl_seg, modo_sat, kp, consultado_usgs)
+    st.markdown("##### Match calculado vs referencia del nodo (no Chile)")
+    st.dataframe(res["df_match"], use_container_width=True, hide_index=True)
+    if res["mejor_ev"] and "Maule" not in res["mejor_ev"] and "Iquique" not in res["mejor_ev"]:
+        st.caption(f"Patrón más parecido en este nodo: **{res['mejor_ev']}** ({res['mejor_match']:.1f}%)")
+
+    st.markdown("#### Calibración todos los nodos mundiales")
+    df_cal = construir_calibracion_mundo(
+        df_global, ttl_seg, modo_sat, kp, consultado_usgs, modo_demo=modo_demo,
+    )
     st.dataframe(df_cal, use_container_width=True, hide_index=True)
     st.download_button(
         "Descargar calibración MUNDO CSV",
