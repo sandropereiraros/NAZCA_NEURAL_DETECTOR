@@ -10,3 +10,4 @@
 - Registro de suscriptores tratado como privado: no se muestran nombres ni Chat IDs en la interfaz pública.
 - API NAZCA inicial agregada para futura capa multiplataforma.
 - Mantiene aviso experimental/no oficial y separación entre estado operativo y nivel de vigilancia.
+- Pestaña admin privada de evidencia y validación post-evento con snapshots previos, hash auditable, cruce contra USGS M5+ e informe descargable.

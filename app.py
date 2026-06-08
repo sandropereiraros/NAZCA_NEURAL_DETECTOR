@@ -3,6 +3,7 @@ import os
 import random
 import base64
 import unicodedata
+import hashlib
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -28,6 +29,7 @@ INTERVALOS_API = {"3 horas": 10800, "6 horas": 21600, "12 horas": 43200, "24 hor
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nazca_cache")
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nazca_logo.png")
 SUSCRIPTORES_TELEGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_suscriptores_telegram.json")
+EVIDENCIA_PREEVENTO_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_evidencia_preevento.csv")
 CHILE_BOUNDS = {
     "min_lat": -56.0,
     "max_lat": -17.0,
@@ -323,6 +325,142 @@ def registrar_en_bitacora(estacion, estado, puntaje, insar, b_val, cond, shoa):
     }])
     archivo = "nazca_log_historico.csv"
     reg.to_csv(archivo, index=False, mode="a", header=not os.path.exists(archivo))
+
+
+def hash_evidencia(payload):
+    base = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+
+
+def registrar_evidencia_preevento(
+    estacion, config, estado, puntaje, nivel_alerta, mejor_ev, mejor_match,
+    total_sismos, total_sismos_chile, b_val, insar, cond, shoa, presion,
+    termico, kp, consultado_usgs, consultado_noaa, origen_em, log_filtro,
+):
+    ahora = datetime.now()
+    payload = {
+        "fecha_hora": ahora.strftime("%Y-%m-%d %H:%M:%S"),
+        "estacion": estacion,
+        "lat": config["lat"],
+        "lon": config["lon"],
+        "estado": estado,
+        "nivel": nivel_alerta["nivel"],
+        "ventana": nivel_alerta["ventana"],
+        "puntaje": round(float(puntaje), 2),
+        "match_m7": round(float(mejor_match), 2),
+        "patron_m7": mejor_ev,
+        "sismos_locales_14d": int(total_sismos),
+        "sismos_chile_14d": int(total_sismos_chile),
+        "b_value": b_val,
+        "insar": round(float(insar), 2),
+        "em": round(float(cond), 2),
+        "shoa": round(float(shoa), 2),
+        "presion": round(float(presion), 2),
+        "termico": round(float(termico), 2),
+        "kp_noaa": int(kp),
+        "consultado_usgs": consultado_usgs,
+        "consultado_noaa": consultado_noaa,
+        "origen_telemetria": origen_em,
+        "log_modelo": log_filtro,
+        "modelo": "NAZCA_CORE_MONITOR_v8.0",
+    }
+    payload["hash_evidencia"] = hash_evidencia(payload)
+    reg = pd.DataFrame([payload])
+    reg.to_csv(EVIDENCIA_PREEVENTO_CSV, index=False, mode="a", header=not os.path.exists(EVIDENCIA_PREEVENTO_CSV))
+    return payload["hash_evidencia"]
+
+
+def leer_evidencia_preevento():
+    if not os.path.exists(EVIDENCIA_PREEVENTO_CSV):
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(EVIDENCIA_PREEVENTO_CSV)
+        if "fecha_hora" in df.columns:
+            df["fecha_hora_dt"] = pd.to_datetime(df["fecha_hora"], errors="coerce")
+        return df
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return pd.DataFrame()
+
+
+def eventos_usgs_validacion(df_sismos, magnitud_min=5.0):
+    if df_sismos.empty:
+        return pd.DataFrame(columns=["Magnitud", "Lugar", "Latitud", "Longitud", "Fecha", "fecha_dt"])
+    eventos = df_sismos.copy()
+    eventos["fecha_dt"] = pd.to_datetime(eventos["Fecha"], errors="coerce")
+    eventos = eventos[eventos["Magnitud"] >= magnitud_min].dropna(subset=["fecha_dt"])
+    return eventos.sort_values("fecha_dt", ascending=False)
+
+
+def evaluar_coincidencias_evidencia(df_evidencia, df_eventos, horas_previas=336, radio_km=RADIO_ESTACION_KM):
+    if df_evidencia.empty or df_eventos.empty:
+        return pd.DataFrame()
+    filas = []
+    for _, ev in df_eventos.iterrows():
+        for _, snap in df_evidencia.dropna(subset=["fecha_hora_dt"]).iterrows():
+            delta_horas = (ev["fecha_dt"] - snap["fecha_hora_dt"]).total_seconds() / 3600
+            if delta_horas < 0 or delta_horas > horas_previas:
+                continue
+            distancia = distancia_km(float(snap["lat"]), float(snap["lon"]), float(ev["Latitud"]), float(ev["Longitud"]))
+            if distancia > radio_km:
+                continue
+            nivel = str(snap.get("nivel", "VERDE"))
+            match = float(snap.get("match_m7", 0) or 0)
+            puntaje = float(snap.get("puntaje", 0) or 0)
+            if nivel not in ("AMARILLO", "NARANJO", "ROJO") and match < 65 and puntaje < 55:
+                continue
+            filas.append({
+                "Evento real": ev["Lugar"],
+                "Magnitud": ev["Magnitud"],
+                "Fecha evento": ev["Fecha"],
+                "Estación previa": snap["estacion"],
+                "Fecha evidencia": snap["fecha_hora"],
+                "Anticipación horas": round(delta_horas, 1),
+                "Anticipación días": round(delta_horas / 24, 2),
+                "Distancia km": round(distancia, 1),
+                "Nivel previo": nivel,
+                "Índice previo %": puntaje,
+                "Match M7+ previo %": match,
+                "b-value previo": snap.get("b_value"),
+                "Sismos locales 14D": snap.get("sismos_locales_14d"),
+                "Hash evidencia": snap.get("hash_evidencia"),
+            })
+    return pd.DataFrame(filas).sort_values(["Fecha evento", "Anticipación horas"], ascending=[False, True]) if filas else pd.DataFrame()
+
+
+def generar_informe_validacion_texto(coincidencias):
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if coincidencias.empty:
+        return (
+            "INFORME DE VALIDACION POST-EVENTO - NAZCA CORE MONITOR\n"
+            f"Generado: {fecha}\n\n"
+            "No se encontraron coincidencias entre eventos USGS y evidencia previa guardada bajo los criterios actuales.\n"
+        )
+    filas = []
+    for _, row in coincidencias.iterrows():
+        filas.append(
+            f"- Evento {row['Magnitud']} | {row['Evento real']} | evento {row['Fecha evento']} | "
+            f"evidencia {row['Fecha evidencia']} | anticipacion {row['Anticipación días']} dias | "
+            f"estacion {row['Estación previa']} | nivel {row['Nivel previo']} | "
+            f"indice {row['Índice previo %']}% | match {row['Match M7+ previo %']}% | "
+            f"hash {row['Hash evidencia']}"
+        )
+    return f"""INFORME DE VALIDACION POST-EVENTO - NAZCA CORE MONITOR
+Generado: {fecha}
+Uso: evidencia privada para revision tecnica. No corresponde a prediccion oficial.
+
+Resumen:
+- Coincidencias encontradas: {len(coincidencias)}
+- Criterio temporal: evidencia registrada antes del evento dentro de 14 dias.
+- Criterio espacial: evento dentro de {RADIO_ESTACION_KM} km de la estacion.
+- Criterio de activacion: nivel amarillo/naranjo/rojo, match >= 65% o indice >= 55%.
+
+Coincidencias:
+{chr(10).join(filas)}
+
+Transparencia:
+Cada fila contiene un hash de evidencia generado al momento del snapshot para fortalecer trazabilidad.
+La validacion debe revisarse junto a falsos positivos, falsos negativos, fuentes disponibles y cambios de modelo.
+"""
 
 
 @st.cache_data(ttl=30)
@@ -1115,6 +1253,15 @@ df_calibracion = construir_calibracion_estaciones(
 )
 nivel_alerta = clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos)
 
+clave_evidencia = f"evidencia_{estacion_sel}_{bloque}_{nivel_alerta['nivel']}_{round(puntaje, 1)}_{round(mejor_match, 1)}"
+if not modo_demo and st.session_state.get("ultima_evidencia") != clave_evidencia:
+    registrar_evidencia_preevento(
+        estacion_sel, config, estado, puntaje, nivel_alerta, mejor_ev, mejor_match,
+        total_sismos, total_sismos_chile, b_val, insar, cond, shoa, presion,
+        termico, kp, consultado_usgs, consultado_noaa, origen_em, log_filtro,
+    )
+    st.session_state["ultima_evidencia"] = clave_evidencia
+
 telegram_estado = "Telegram desactivado."
 if telegram_activo:
     puede_notificar, detalle_notificacion = debe_notificar_telegram(
@@ -1161,12 +1308,13 @@ if api_nueva:
 else:
     st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
 
-tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion = st.tabs([
+tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = st.tabs([
     "ESCANEO EN VIVO",
     "COMPARATIVA M7+",
     "CALIBRACIÓN ESTACIONES",
     "INFORME DE CALIDAD",
     "SUSCRIPCIÓN TELEGRAM",
+    "EVIDENCIA Y VALIDACIÓN",
 ])
 
 with tab_vivo:
@@ -1457,6 +1605,58 @@ with tab_suscripcion:
                 "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
             )
             st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
+
+with tab_evidencia:
+    if not admin_activo:
+        st.info("Módulo privado. Ingresa PIN admin para revisar evidencia y validación.")
+    else:
+        st.markdown("### Evidencia y validación post-evento")
+        st.info(
+            "Este módulo cruza snapshots previos del sistema contra eventos USGS posteriores. "
+            "Su objetivo es documentar coincidencias experimentales, falsos positivos y trazabilidad."
+        )
+        df_evidencia = leer_evidencia_preevento()
+        eventos_validacion = eventos_usgs_validacion(df_sismos, magnitud_min=5.0)
+        coincidencias = evaluar_coincidencias_evidencia(df_evidencia, eventos_validacion)
+
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Snapshots guardados", len(df_evidencia))
+        e2.metric("Eventos USGS M5+", len(eventos_validacion))
+        e3.metric("Coincidencias", len(coincidencias))
+
+        if not df_evidencia.empty:
+            st.markdown("#### Últimas evidencias previas")
+            cols_evidencia = [
+                "fecha_hora", "estacion", "nivel", "puntaje", "match_m7",
+                "b_value", "sismos_locales_14d", "hash_evidencia",
+            ]
+            st.dataframe(df_evidencia[cols_evidencia].tail(25).sort_values("fecha_hora", ascending=False), use_container_width=True, hide_index=True)
+            st.download_button(
+                "Descargar evidencia previa CSV",
+                df_evidencia.drop(columns=["fecha_hora_dt"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
+                "nazca_evidencia_preevento.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("Aún no hay snapshots de evidencia previa guardados.")
+
+        st.markdown("#### Coincidencias post-evento")
+        if not coincidencias.empty:
+            st.dataframe(coincidencias, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No hay coincidencias bajo los criterios actuales.")
+
+        informe_validacion = generar_informe_validacion_texto(coincidencias)
+        st.download_button(
+            "Descargar informe de validación TXT",
+            informe_validacion.encode("utf-8"),
+            "informe_validacion_post_evento_nazca.txt",
+            "text/plain",
+            use_container_width=True,
+        )
+        with st.expander("Ver informe de validación"):
+            st.text(informe_validacion)
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")
