@@ -15,6 +15,7 @@ venv/
 nazca_log_historico.csv
 nazca_suscriptores_telegram.json
 nazca_evidencia_preevento.csv
+nazca_evidencia_mundo.csv
 informes/
 *.pdf
 .streamlit/secrets.toml

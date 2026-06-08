@@ -13,6 +13,11 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
+try:
+    import nazca_mundo_lab as mundo_lab
+except ImportError:
+    mundo_lab = None
+
 # ==============================================================================
 # CONFIGURACIÓN
 # ==============================================================================
@@ -1202,8 +1207,15 @@ if admin_activo:
     forzar_sismos_14d = st.sidebar.button("Actualizar sismos 14D ahora", use_container_width=True)
     if forzar_sismos_14d:
         borrar_cache(clave_sismos_14d(ttl_seg))
+    if mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO:
+        forzar_mundo = st.sidebar.button("Actualizar sismos MUNDO ahora", use_container_width=True)
+        if forzar_mundo:
+            mundo_lab.borrar_cache_mundo(mundo_lab.clave_sismos_global(ttl_seg))
+    else:
+        forzar_mundo = False
 else:
     forzar_sismos_14d = False
+    forzar_mundo = False
 
 st.sidebar.markdown("---")
 if admin_activo:
@@ -1339,14 +1351,19 @@ if api_nueva:
 else:
     st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
 
-tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = st.tabs([
+_tab_labels = [
     "ESCANEO EN VIVO",
     "COMPARATIVA M7+",
     "CALIBRACIÓN ESTACIONES",
     "INFORME DE CALIDAD",
     "SUSCRIPCIÓN TELEGRAM",
     "EVIDENCIA Y VALIDACIÓN",
-])
+]
+if mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo:
+    _tab_labels.append("MUNDO (LAB)")
+_tabs = st.tabs(_tab_labels)
+tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = _tabs[:6]
+tab_mundo = _tabs[6] if len(_tabs) > 6 else None
 
 with tab_vivo:
     if modo_demo and admin_activo:
@@ -1695,6 +1712,17 @@ with tab_evidencia:
         )
         with st.expander("Ver informe de validación"):
             st.text(informe_validacion)
+
+if tab_mundo is not None and mundo_lab:
+    with tab_mundo:
+        mundo_lab.render_mundo_lab(
+            admin_activo=admin_activo,
+            ttl_seg=ttl_seg,
+            ttl_horas=ttl_horas,
+            forzar=forzar_mundo,
+            modo_sat=modo_sat,
+            kp=kp,
+        )
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")
