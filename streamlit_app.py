@@ -1844,6 +1844,7 @@ with tab_calidad:
         {"Parámetro": "VENTANA_SISMICA", "Valor": "14D móvil", "Calidad": "OPERATIVO", "Uso": "Recalcula con datos frescos disponibles sin esperar un ciclo completo"},
         {"Parámetro": "CACHE_API", "Valor": f"{ttl_horas} h", "Calidad": "OPERATIVO", "Uso": "Reduce llamadas a USGS/NOAA y estabiliza la app pública"},
     ])
+<<<<<<< Updated upstream
     st.dataframe(df_parametros, use_container_width=True, hide_index=True)
 
     st.markdown("#### Protocolo mensual de calibración")
@@ -2065,3 +2066,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+=======
+    st.dataframe(df_estatico_fijo, use_container_width=True, hide_index=True)
+>>>>>>> Stashed changes
