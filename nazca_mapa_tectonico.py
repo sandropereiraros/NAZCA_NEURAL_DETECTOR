@@ -7,7 +7,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-# Segmentos simplificados del Anillo de Fuego y zonas de subducción/colisión activas.
+# Cinturón de Fuego del Pacífico (solo subducción pacífica; sin Mediterráneo ni Himalaya).
 # Formato: lista de [lon, lat] por tramo.
 ANILLO_DE_FUEGO = [
     {
@@ -67,20 +67,6 @@ ANILLO_DE_FUEGO = [
             [-118, 34], [-115, 30], [-112, 26],
         ],
     },
-    {
-        "nombre": "Mediterráneo · Egeo",
-        "tipo": "colision",
-        "path": [
-            [25, 38], [27, 37], [29, 36], [31, 35], [33, 34],
-        ],
-    },
-    {
-        "nombre": "Himalaya · colisión",
-        "tipo": "colision",
-        "path": [
-            [70, 28], [74, 29], [78, 30], [82, 31], [86, 32], [90, 33],
-        ],
-    },
 ]
 
 COLOR_TECTONICA = {
@@ -92,9 +78,22 @@ COLOR_TECTONICA = {
 }
 
 
+def _acortar_lugar(lugar, max_len=34):
+    if not lugar:
+        return "Sin lugar"
+    txt = str(lugar).strip()
+    bajo = txt.lower()
+    if " of " in bajo:
+        txt = txt.split(" of ", 1)[-1]
+    txt = txt.split(",")[0].strip()
+    if len(txt) > max_len:
+        txt = txt[: max_len - 1] + "…"
+    return txt
+
+
 def _preparar_sismos(df_sismos):
     if df_sismos is None or df_sismos.empty:
-        return pd.DataFrame(columns=["lon", "lat", "mag", "radio", "color_rgb", "lugar"])
+        return pd.DataFrame(columns=["lon", "lat", "mag", "radio", "color_rgb", "lugar", "fecha", "label"])
     df = df_sismos.copy()
     if "Latitud" in df.columns:
         df = df.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag", "Lugar": "lugar"})
@@ -106,7 +105,27 @@ def _preparar_sismos(df_sismos):
     df["label"] = "Sismo USGS"
     if "lugar" not in df.columns:
         df["lugar"] = ""
-    return df[["lon", "lat", "mag", "radio", "color_rgb", "lugar", "label"]].dropna(subset=["lon", "lat"])
+    if "fecha" not in df.columns:
+        df["fecha"] = df["Fecha"] if "Fecha" in df.columns else ""
+    return df[["lon", "lat", "mag", "radio", "color_rgb", "lugar", "fecha", "label"]].dropna(subset=["lon", "lat"])
+
+
+def _preparar_etiquetas_sismos(df_sismos, max_etiquetas=12):
+    sismos = _preparar_sismos(df_sismos)
+    if sismos.empty:
+        return pd.DataFrame(columns=["lon", "lat", "etiqueta", "mag", "lugar", "fecha", "label"])
+    orden = sismos.copy()
+    if "fecha" in orden.columns and orden["fecha"].astype(str).str.strip().ne("").any():
+        orden["_orden"] = pd.to_datetime(orden["fecha"], errors="coerce")
+        orden = orden.sort_values("_orden", ascending=False, na_position="last")
+    else:
+        orden = orden.sort_values("mag", ascending=False)
+    orden = orden.head(max_etiquetas)
+    orden["etiqueta"] = orden.apply(
+        lambda r: f"M{r['mag']:.1f} · {_acortar_lugar(r.get('lugar', ''))}", axis=1
+    )
+    orden["label"] = "Sismo reciente"
+    return orden[["lon", "lat", "etiqueta", "mag", "lugar", "fecha", "label"]]
 
 
 def _paths_tectonicos(segmentos=None):
@@ -135,6 +154,8 @@ def render_mapa_tectonico(
     altura=430,
     mostrar_anillo=True,
     segmentos_tectonicos=None,
+    mostrar_etiquetas=True,
+    max_etiquetas=12,
 ):
     estacion_color_rgb = estacion_color_rgb or [59, 130, 246, 255]
     sismos = _preparar_sismos(df_sismos)
@@ -181,6 +202,23 @@ def render_mapa_tectonico(
             line_width_min_pixels=1,
         ))
 
+    if mostrar_etiquetas:
+        etiquetas = _preparar_etiquetas_sismos(df_sismos, max_etiquetas=max_etiquetas)
+        if not etiquetas.empty:
+            capas.append(pdk.Layer(
+                "TextLayer",
+                data=etiquetas,
+                get_position=["lon", "lat"],
+                get_text="etiqueta",
+                get_size=13,
+                get_color=[235, 235, 245, 240],
+                get_angle=0,
+                get_text_anchor="start",
+                get_alignment_baseline="bottom",
+                get_pixel_offset=[10, -12],
+                pickable=True,
+            ))
+
     if estacion_lat is not None and estacion_lon is not None:
         capas.append(pdk.Layer(
             "ScatterplotLayer",
@@ -216,7 +254,7 @@ def render_mapa_tectonico(
         # La URL raster dark_all/{z}/{x}/{y}.png no carga en pydeck → fondo negro.
         map_style=None,
         tooltip={
-            "html": "<b>{label}</b><br/>Mag: {mag}<br/>{lugar}",
+            "html": "<b>M{mag}</b> · {lugar}<br/>{fecha}",
             "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"},
         },
     )
@@ -251,7 +289,8 @@ def _fallback_st_map(sismos, estacion_lat, estacion_lon, estacion_color_rgb, zoo
 
 def leyenda_mapa_tectonico():
     return (
-        "🟠 Líneas naranjas: subducción (Anillo de Fuego) · "
-        "🟡 Amarillo: colisión · 🔴 Sismos USGS M6+ · 🟡 M4.5–5.9 · "
-        "🔵 Punto grande: estación/nodo activo"
+        "🟠 Cinturón de Fuego del Pacífico · "
+        "🔴 Sismos M6+ · 🟡 M4.5–5.9 · "
+        "Etiquetas: últimos sismos USGS (M + lugar) · "
+        "🔵 Nodo/estación activa"
     )

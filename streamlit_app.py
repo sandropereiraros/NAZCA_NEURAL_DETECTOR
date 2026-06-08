@@ -812,9 +812,9 @@ _ANILLO_FUEGO_PATHS = [
     {"path": [[155, 52], [148, 44], [143, 39], [139, 35]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[126, 8], [119, -1], [108, -9], [100, -13], [96, -15]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[176, -18], [179, -26], [-175, -34], [177, -42]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[-81, -4], [-77, -12], [-74, -24], [-72, -36], [-74, -48], [-75, -52]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[-108, 16], [-98, 7], [-90, 1], [-84, -5]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[-132, 54], [-122, 42], [-115, 30]], "color": [255, 90, 40, 210], "ancho": 4},
-    {"path": [[70, 28], [82, 31], [90, 33]], "color": [255, 200, 60, 210], "ancho": 3},
 ]
 
 _CATALOGO_MUNDO = [
@@ -866,10 +866,12 @@ def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura
     if df_sismos is not None and not df_sismos.empty:
         for _, r in df_sismos.iterrows():
             mag = float(r.get("Magnitud", r.get("mag", 4.5)))
+            lugar = str(r.get("Lugar", r.get("lugar", "")))
+            fecha = str(r.get("Fecha", r.get("fecha", "")))
             sismos.append({
                 "lon": float(r["Longitud"] if "Longitud" in r else r["lon"]),
                 "lat": float(r["Latitud"] if "Latitud" in r else r["lat"]),
-                "mag": mag, "lugar": str(r.get("Lugar", "")),
+                "mag": mag, "lugar": lugar, "fecha": fecha,
                 "radio": (max(mag, 2.5) ** 2) * 1800,
                 "color": [239, 68, 68, 210] if mag >= 6 else [250, 204, 21, 200],
                 "label": "Sismo USGS",
@@ -877,6 +879,21 @@ def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura
     capas = [pdk.Layer("PathLayer", data=_ANILLO_FUEGO_PATHS, get_path="path", get_color="color", get_width="ancho", width_min_pixels=2)]
     if sismos:
         capas.append(pdk.Layer("ScatterplotLayer", data=sismos, get_position=["lon", "lat"], get_radius="radio", get_fill_color="color", pickable=True))
+        etiquetas = []
+        for item in sorted(sismos, key=lambda x: x.get("fecha", ""), reverse=True)[:12]:
+            lugar_corto = item["lugar"].split(" of ")[-1].split(",")[0].strip() if item["lugar"] else "Sin lugar"
+            if len(lugar_corto) > 34:
+                lugar_corto = lugar_corto[:33] + "…"
+            etiquetas.append({
+                "lon": item["lon"], "lat": item["lat"],
+                "etiqueta": f"M{item['mag']:.1f} · {lugar_corto}",
+            })
+        if etiquetas:
+            capas.append(pdk.Layer(
+                "TextLayer", data=etiquetas, get_position=["lon", "lat"], get_text="etiqueta",
+                get_size=13, get_color=[235, 235, 245, 240], get_text_anchor="start",
+                get_alignment_baseline="bottom", get_pixel_offset=[10, -12],
+            ))
     if est_lat is not None:
         capas.append(pdk.Layer("ScatterplotLayer", data=[{"lon": est_lon, "lat": est_lat, "radio": 28000, "color": [59, 130, 246, 255]}],
                                  get_position=["lon", "lat"], get_radius="radio", get_fill_color="color"))
@@ -884,9 +901,10 @@ def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura
         layers=capas,
         initial_view_state=pdk.ViewState(latitude=est_lat or 10, longitude=est_lon or 120, zoom=zoom),
         map_style=None,
+        tooltip={"html": "<b>M{mag}</b> · {lugar}<br/>{fecha}", "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"}},
     )
     st.pydeck_chart(deck, height=altura, use_container_width=True)
-    st.caption("🟠 Anillo de Fuego · 🔴 sismos USGS M6+ · 🟡 M4.5+ · 🔵 nodo activo")
+    st.caption("🟠 Cinturón de Fuego del Pacífico · Etiquetas: últimos sismos USGS · 🔵 nodo activo")
 
 
 def _fetch_usgs_global_inline():
@@ -928,8 +946,9 @@ def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
     st.metric("Sismos mundiales USGS M4.5+ (sin Chile)", len(df_g))
     st.markdown("#### Terremotos históricos MUNDIALES (Japón, Filipinas, Indonesia…)")
     st.dataframe(pd.DataFrame(_CATALOGO_MUNDO), use_container_width=True, hide_index=True)
-    st.markdown(f"#### Mapa — Anillo de Fuego + USGS · Nodo: **{nodo_sel}**")
-    _render_mapa_anillo_fuego(df_g, nodo["lat"], nodo["lon"], nodo_sel, zoom=2, altura=420)
+    df_nodo = filtrar_sismos_estacion(df_g, nodo["lat"], nodo["lon"], radio_km=400)
+    st.markdown(f"#### Mapa — Cinturón de Fuego + USGS · Nodo: **{nodo_sel}**")
+    _render_mapa_anillo_fuego(df_nodo, nodo["lat"], nodo["lon"], nodo_sel, zoom=2, altura=420)
     if modo_demo:
         st.error("MODO DEMO activo en laboratorio mundial.")
 
@@ -1664,9 +1683,9 @@ with tab_vivo:
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        st.markdown("#### Mapa sísmico regional + Anillo de Fuego")
+        st.markdown("#### Mapa sísmico regional + Cinturón de Fuego")
         _render_mapa_anillo_fuego(
-            df_sismos, config["lat"], config["lon"], estacion_sel, zoom=4, altura=400,
+            df_sismos_local, config["lat"], config["lon"], estacion_sel, zoom=4, altura=400,
         )
 
     with col_tabla:

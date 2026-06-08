@@ -1516,10 +1516,10 @@ with tab_vivo:
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        st.markdown("#### Mapa sísmico regional + línea de fuego")
+        st.markdown("#### Mapa sísmico regional + Cinturón de Fuego")
         if mapa_tect:
             mapa_tect.render_mapa_tectonico(
-                df_sismos=df_sismos,
+                df_sismos=df_sismos_local,
                 estacion_lat=config["lat"],
                 estacion_lon=config["lon"],
                 estacion_label=estacion_sel,

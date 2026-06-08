@@ -750,10 +750,10 @@ def render_mundo_lab(
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
-        st.markdown("#### Mapa global — Anillo de Fuego + sismos USGS")
+        st.markdown("#### Mapa global — Cinturón de Fuego + sismos USGS")
         if mapa_tect:
             mapa_tect.render_mapa_tectonico(
-                df_sismos=df_global,
+                df_sismos=res["df_local"],
                 estacion_lat=config["lat"],
                 estacion_lon=config["lon"],
                 estacion_label=nodo_sel,
