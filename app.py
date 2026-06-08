@@ -5,6 +5,7 @@ import base64
 import unicodedata
 import hashlib
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,27 @@ CHILE_BOUNDS = {
     "min_lon": -76.5,
     "max_lon": -66.0,
 }
+CHILE_TZ = ZoneInfo("America/Santiago")
+CHILE_UTC_OFFSET_HOURS = -4
+CHILE_TZ_LABEL = "Chile continental (UTC-4)"
+
+
+def ahora_chile():
+    return datetime.now(CHILE_TZ).replace(tzinfo=None)
+
+
+def timestamp_usgs_a_chile(timestamp_ms):
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=CHILE_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+def fecha_evidencia_a_chile(fecha_valor, zona_horaria=None):
+    ts = pd.to_datetime(fecha_valor, errors="coerce")
+    if pd.isna(ts):
+        return pd.NaT
+    zona = str(zona_horaria or "").strip()
+    if zona in (CHILE_TZ_LABEL, "America/Santiago"):
+        return ts
+    return ts - timedelta(hours=4)
 
 st.markdown(
     """
@@ -168,7 +190,7 @@ def leer_cache_detalle(clave):
         with open(ruta, "r", encoding="utf-8") as f:
             datos = json.load(f)
         expira = datetime.fromisoformat(datos["expira"])
-        vigente = datetime.now() <= expira
+        vigente = ahora_chile() <= expira
         return datos["payload"], datos.get("consultado"), expira, vigente
     except (json.JSONDecodeError, KeyError, ValueError):
         return None, None, None, False
@@ -182,7 +204,7 @@ def leer_cache(clave, ttl_seg):
 
 
 def guardar_cache(clave, payload, ttl_seg):
-    ahora = datetime.now()
+    ahora = ahora_chile()
     datos = {
         "consultado": ahora.strftime("%Y-%m-%d %H:%M:%S"),
         "expira": (ahora + timedelta(seconds=ttl_seg)).isoformat(),
@@ -207,7 +229,7 @@ def obtener_con_cache(clave, ttl_seg, fetch_fn, forzar=False):
     payload_nuevo = fetch_fn()
     if payload_nuevo is not None:
         guardar_cache(clave, payload_nuevo, ttl_seg)
-        return payload_nuevo, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), True
+        return payload_nuevo, ahora_chile().strftime("%Y-%m-%d %H:%M:%S"), True
 
     # Si USGS/NOAA falla, mantenemos la última lectura buena para no dejar el sistema sin cálculo.
     if payload_cache is not None:
@@ -216,13 +238,13 @@ def obtener_con_cache(clave, ttl_seg, fetch_fn, forzar=False):
 
 
 def bucket_telemetria(estacion, ttl_seg):
-    return int(datetime.now().timestamp() // ttl_seg), estacion
+    return int(ahora_chile().timestamp() // ttl_seg), estacion
 
 # ==============================================================================
 # APIs (solo invocadas cuando la caché expira)
 # ==============================================================================
 def _fetch_sismos_regionales(lat, lon, dias=14):
-    inicio = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d")
+    inicio = (ahora_chile() - timedelta(days=dias)).strftime("%Y-%m-%d")
     url = (
         "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson"
         f"&starttime={inicio}"
@@ -240,7 +262,7 @@ def _fetch_sismos_regionales(lat, lon, dias=14):
                     "Magnitud": float(p.get("mag") or 0),
                     "Lugar": p.get("place", ""),
                     "Latitud": c[1], "Longitud": c[0],
-                    "Fecha": datetime.fromtimestamp(p["time"] / 1000).strftime("%Y-%m-%d %H:%M"),
+                    "Fecha": timestamp_usgs_a_chile(p["time"]),
                 })
             return filas
     except requests.RequestException:
@@ -319,7 +341,7 @@ def sanitizar_texto(texto):
 
 def registrar_en_bitacora(estacion, estado, puntaje, insar, b_val, cond, shoa):
     reg = pd.DataFrame([{
-        "Fecha_Hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Fecha_Hora": ahora_chile().strftime("%Y-%m-%d %H:%M:%S"),
         "Estacion": estacion, "Estado": estado, "Criticidad_%": puntaje,
         "InSAR_%": insar, "b-value_14D": b_val, "EM_mS/m": cond, "SHOA_cm": shoa,
     }])
@@ -337,7 +359,7 @@ def registrar_evidencia_preevento(
     total_sismos, total_sismos_chile, b_val, insar, cond, shoa, presion,
     termico, kp, consultado_usgs, consultado_noaa, origen_em, log_filtro,
 ):
-    ahora = datetime.now()
+    ahora = ahora_chile()
     payload = {
         "fecha_hora": ahora.strftime("%Y-%m-%d %H:%M:%S"),
         "estacion": estacion,
@@ -363,6 +385,7 @@ def registrar_evidencia_preevento(
         "origen_telemetria": origen_em,
         "log_modelo": log_filtro,
         "modelo": "NAZCA_CORE_MONITOR_v8.0",
+        "zona_horaria": CHILE_TZ_LABEL,
     }
     payload["hash_evidencia"] = hash_evidencia(payload)
     reg = pd.DataFrame([payload])
@@ -376,7 +399,15 @@ def leer_evidencia_preevento():
     try:
         df = pd.read_csv(EVIDENCIA_PREEVENTO_CSV)
         if "fecha_hora" in df.columns:
-            df["fecha_hora_dt"] = pd.to_datetime(df["fecha_hora"], errors="coerce")
+            zonas = df["zona_horaria"] if "zona_horaria" in df.columns else None
+            df["fecha_hora_dt"] = [
+                fecha_evidencia_a_chile(f, z if zonas is not None else None)
+                for f, z in zip(
+                    df["fecha_hora"],
+                    zonas if zonas is not None else [None] * len(df),
+                )
+            ]
+            df["fecha_hora"] = pd.to_datetime(df["fecha_hora_dt"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
         return df
     except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
         return pd.DataFrame()
@@ -428,7 +459,7 @@ def evaluar_coincidencias_evidencia(df_evidencia, df_eventos, horas_previas=336,
 
 
 def generar_informe_validacion_texto(coincidencias):
-    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
     if coincidencias.empty:
         return (
             "INFORME DE VALIDACION POST-EVENTO - NAZCA CORE MONITOR\n"
@@ -603,7 +634,7 @@ def upsert_suscriptor_telegram(nombre, chat_id, estacion, nivel_minimo):
         "estacion": estacion,
         "nivel_minimo": nivel_minimo,
         "activo": True,
-        "registrado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "registrado": ahora_chile().strftime("%Y-%m-%d %H:%M:%S"),
     }
     actualizados = []
     reemplazado = False
@@ -669,7 +700,7 @@ def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo)
 
     clave = f"telegram_{'demo_' if modo_demo else ''}{estacion}_{mejor_ev}"
     ultimo = st.session_state.get(clave)
-    ahora = datetime.now()
+    ahora = ahora_chile()
     if ultimo and ahora - ultimo < timedelta(minutes=COOLDOWN_TELEGRAM_MIN):
         restante = COOLDOWN_TELEGRAM_MIN - int((ahora - ultimo).total_seconds() // 60)
         return False, f"Cooldown activo ({restante} min)."
@@ -765,7 +796,7 @@ def filtrar_sismos_estacion(df_sismos, lat, lon, radio_km=RADIO_ESTACION_KM):
 
 def generar_sismos_demo(config, cantidad=85):
     rng = random.Random(f"demo_{config['lat']}_{config['lon']}")
-    ahora = datetime.now()
+    ahora = ahora_chile()
     filas = []
     for i in range(cantidad):
         mag = round(rng.uniform(3.4, 6.8), 1)
@@ -939,7 +970,7 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
 
 
 def generar_informe_calidad_texto(df_calibracion, consultado_usgs, consultado_noaa, ttl_seg):
-    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
     ttl_horas = max(1, ttl_seg // 3600)
     pesos_txt = "\n".join(f"- {k}: {v:.2f}" for k, v in PESOS.items())
     estaciones_txt = "\n".join(
@@ -1053,7 +1084,7 @@ def generar_pdf(
     pdf.set_font("Arial", "", 9)
     pdf_cell(pdf, 0, 6, "Informe tecnico preliminar de condicion sismica local - Core Monitor v8.0", ln=True)
     pdf.set_x(44)
-    pdf_cell(pdf, 0, 6, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+    pdf_cell(pdf, 0, 6, f"Generado: {ahora_chile().strftime('%Y-%m-%d %H:%M:%S')} ({CHILE_TZ_LABEL})", ln=True)
     pdf.set_x(44)
     pdf_cell(pdf, 0, 6, "Desarrollado por Sandro Pereira A. - CEO & Developer", ln=True)
     pdf.ln(12)
@@ -1278,7 +1309,7 @@ if telegram_activo:
         if ok_telegram:
             estado_suscriptores = enviar_alerta_suscriptores(mensaje, estacion_sel, nivel_alerta, modo_demo)
             telegram_estado = f"{telegram_estado} {estado_suscriptores}"
-            st.session_state[detalle_notificacion] = datetime.now()
+            st.session_state[detalle_notificacion] = ahora_chile()
     else:
         telegram_estado = detalle_notificacion
 
@@ -1611,6 +1642,9 @@ with tab_evidencia:
         st.info("Módulo privado. Ingresa PIN admin para revisar evidencia y validación.")
     else:
         st.markdown("### Evidencia y validación post-evento")
+        st.caption(
+            f"Hora actual del sistema: **{ahora_chile().strftime('%Y-%m-%d %H:%M:%S')}** ({CHILE_TZ_LABEL})"
+        )
         st.info(
             "Este módulo cruza snapshots previos del sistema contra eventos USGS posteriores. "
             "Su objetivo es documentar coincidencias experimentales, falsos positivos y trazabilidad."
@@ -1626,6 +1660,10 @@ with tab_evidencia:
 
         if not df_evidencia.empty:
             st.markdown("#### Últimas evidencias previas")
+            st.caption(
+                f"Fechas en {CHILE_TZ_LABEL}. "
+                "Los registros guardados antes de este ajuste pueden mostrar hora UTC del servidor (+4 h respecto a Chile)."
+            )
             cols_evidencia = [
                 "fecha_hora", "estacion", "nivel", "puntaje", "match_m7",
                 "b_value", "sismos_locales_14d", "hash_evidencia",
