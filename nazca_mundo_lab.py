@@ -751,23 +751,28 @@ def render_mundo_lab(
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
         st.markdown("#### Mapa global — Cinturón de Fuego + sismos USGS")
+        mapa_renderizado = False
         if mapa_tect:
-            mapa_tect.render_mapa_tectonico(
-                df_sismos=df_global,
-                df_etiquetas=res["df_local"],
-                estacion_lat=config["lat"],
-                estacion_lon=config["lon"],
-                estacion_label=nodo_sel,
-                estacion_color_rgb=[59, 130, 246, 255],
-                lat_center=config["lat"],
-                lon_center=config["lon"],
-                zoom=2,
-                altura=420,
-                mostrar_anillo=True,
-                max_etiquetas=15,
-            )
-            st.caption(mapa_tect.leyenda_mapa_tectonico())
-        else:
+            try:
+                mapa_tect.render_mapa_tectonico(
+                    df_sismos=df_global,
+                    df_etiquetas=res["df_local"],
+                    estacion_lat=config["lat"],
+                    estacion_lon=config["lon"],
+                    estacion_label=nodo_sel,
+                    estacion_color_rgb=[59, 130, 246, 255],
+                    lat_center=config["lat"],
+                    lon_center=config["lon"],
+                    zoom=2,
+                    altura=420,
+                    mostrar_anillo=True,
+                    max_etiquetas=15,
+                )
+                st.caption(mapa_tect.leyenda_mapa_tectonico())
+                mapa_renderizado = True
+            except Exception as exc:
+                st.warning(f"Mapa pydeck no disponible ({exc}). Mostrando vista simplificada.")
+        if not mapa_renderizado:
             mapa_df = pd.DataFrame([{"lat": config["lat"], "lon": config["lon"], "size": 200, "color": "#3b82f6"}])
             if not res["df_local"].empty:
                 sm = res["df_local"].rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})

@@ -124,8 +124,15 @@ def _preparar_sismos(df_sismos):
     return df[["lon", "lat", "mag", "radio", "color_rgb", "lugar", "fecha", "label"]].dropna(subset=["lon", "lat"])
 
 
+def _fuente_etiquetas(df_etiquetas, df_sismos):
+    """Evita 'df_a or df_b' — pandas no permite evaluar DataFrames como booleano."""
+    if df_etiquetas is not None and not df_etiquetas.empty:
+        return df_etiquetas
+    return df_sismos
+
+
 def _preparar_etiquetas_sismos(df_sismos, max_etiquetas=12, df_fuente=None):
-    sismos = _preparar_sismos(df_fuente if df_fuente is not None else df_sismos)
+    sismos = _preparar_sismos(_fuente_etiquetas(df_fuente, df_sismos))
     if sismos.empty:
         return pd.DataFrame(columns=["lon", "lat", "etiqueta", "mag", "lugar", "fecha", "label"])
     orden = sismos.copy()
@@ -243,7 +250,7 @@ def render_mapa_tectonico(
 
     if mostrar_etiquetas:
         etiquetas = _preparar_etiquetas_sismos(
-            df_sismos, max_etiquetas=max_etiquetas, df_fuente=df_etiquetas or df_sismos,
+            df_sismos, max_etiquetas=max_etiquetas, df_fuente=df_etiquetas,
         )
         if not etiquetas.empty:
             capas.append(pdk.Layer(
