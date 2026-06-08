@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from fpdf import FPDF
 
 import nazca_alertas as alertas
@@ -815,8 +816,42 @@ def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar=0.0
     return alertas.clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar)
 
 
-def render_sirena_alerta():
+def render_sirena_alerta(duracion_seg=6):
+    """Alerta visual + tono de sirena en el navegador (Web Audio API)."""
     st.error("SIRENA LOCAL: vigilancia roja experimental. Validar con fuentes oficiales.")
+    components.html(
+        f"""
+        <script>
+        (function () {{
+          const DUR = {int(duracion_seg)};
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return;
+          const ctx = new AC();
+          function tocar() {{
+            const gain = ctx.createGain();
+            gain.gain.value = 0.28;
+            gain.connect(ctx.destination);
+            const osc = ctx.createOscillator();
+            osc.type = "square";
+            osc.connect(gain);
+            const t0 = ctx.currentTime;
+            osc.start(t0);
+            for (let i = 0; i < DUR * 2; i++) {{
+              osc.frequency.setValueAtTime(i % 2 ? 720 : 980, t0 + i * 0.42);
+            }}
+            osc.stop(t0 + DUR);
+            setTimeout(function () {{ ctx.close(); }}, (DUR + 0.6) * 1000);
+          }}
+          if (ctx.state === "suspended") {{
+            ctx.resume().then(tocar).catch(tocar);
+          }} else {{
+            tocar();
+          }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def _entorno_streamlit_cloud():
@@ -1790,8 +1825,8 @@ with tab_vivo:
             f"{nivel_alerta['color']} ALERTA ROJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
             f"{nivel_alerta['mensaje']}"
         )
-        if sirena_activa and not modo_demo:
-            clave_sirena = f"sirena_{estacion_sel}_{round(puntaje, 1)}_{mejor_ev}"
+        if sirena_activa and nivel_alerta.get("sirena"):
+            clave_sirena = f"sirena_{estacion_sel}_{round(puntaje, 1)}_{mejor_ev}_{'demo' if modo_demo else bloque}"
             if st.session_state.get("ultima_sirena") != clave_sirena:
                 render_sirena_alerta()
                 st.session_state["ultima_sirena"] = clave_sirena
@@ -1811,6 +1846,11 @@ with tab_vivo:
     st.caption(log_filtro)
     if nodo_offline:
         st.warning("Nodo offline — telemetría por interpolación de vecindad.")
+    if modo_demo and admin_activo and sirena_activa:
+        if st.button("Probar sirena de emergencia (demo)", use_container_width=True):
+            render_sirena_alerta()
+            st.session_state["ultima_sirena"] = f"demo_manual_{ahora_chile().isoformat()}"
+
     if telegram_activo and admin_activo:
         st.caption(f"Telegram vigilancia M7+: {telegram_estado}")
         if st.button("Enviar prueba Telegram", use_container_width=True):
@@ -1830,6 +1870,8 @@ with tab_vivo:
                 modo_demo=True,
             )
             ok_demo, msg_demo = enviar_telegram(mensaje_demo)
+            if sirena_activa:
+                render_sirena_alerta()
             if ok_demo:
                 st.success(msg_demo)
             else:
@@ -1843,6 +1885,8 @@ with tab_vivo:
                 modo_demo=True,
             )
             enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
+            if sirena_activa:
+                render_sirena_alerta()
             st.info(f"Demo enviada a suscriptores activos: {enviados} | errores: {errores}")
 
     c1, c2, c3, c4, c5 = st.columns(5)
