@@ -35,12 +35,14 @@ ANILLO_DE_FUEGO = [
         ],
     },
     {
-        "nombre": "Nueva Zelanda · Tonga",
+        "nombre": "Nueva Zelanda · Tonga (norte)",
         "tipo": "subduccion",
-        "path": [
-            [176, -18], [178, -22], [179, -26], [-178, -30],
-            [-175, -34], [-178, -38], [177, -42], [175, -46],
-        ],
+        "path": [[176, -18], [178, -22], [179, -26]],
+    },
+    {
+        "nombre": "Nueva Zelanda · Tonga (sur)",
+        "tipo": "subduccion",
+        "path": [[-178, -30], [-176, -34], [-174, -38], [-172, -42], [-170, -46]],
     },
     {
         "nombre": "Andes · Chile · Perú",
@@ -91,6 +93,20 @@ def _acortar_lugar(lugar, max_len=34):
     return txt
 
 
+COLOR_MAG_ALTA = [239, 68, 68, 210]      # 🔴 M6.0+
+COLOR_MAG_MEDIA = [250, 204, 21, 200]    # 🟡 M4.5–5.9
+COLOR_MAG_BAJA = [74, 222, 128, 210]     # 🟢 M<4.5 — criterio verde Chile
+
+
+def color_por_magnitud(mag):
+    m = float(mag or 0)
+    if m >= 6.0:
+        return COLOR_MAG_ALTA
+    if m >= 4.5:
+        return COLOR_MAG_MEDIA
+    return COLOR_MAG_BAJA
+
+
 def _preparar_sismos(df_sismos):
     if df_sismos is None or df_sismos.empty:
         return pd.DataFrame(columns=["lon", "lat", "mag", "radio", "color_rgb", "lugar", "fecha", "label"])
@@ -99,9 +115,7 @@ def _preparar_sismos(df_sismos):
         df = df.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag", "Lugar": "lugar"})
     df["mag"] = pd.to_numeric(df.get("mag", 4.0), errors="coerce").fillna(4.0)
     df["radio"] = (df["mag"].clip(lower=2.5) ** 2) * 1800
-    df["color_rgb"] = df["mag"].apply(
-        lambda m: [239, 68, 68, 210] if m >= 6.0 else ([250, 204, 21, 200] if m >= 4.5 else [148, 163, 184, 180])
-    )
+    df["color_rgb"] = df["mag"].apply(color_por_magnitud)
     df["label"] = "Sismo USGS"
     if "lugar" not in df.columns:
         df["lugar"] = ""
@@ -110,8 +124,8 @@ def _preparar_sismos(df_sismos):
     return df[["lon", "lat", "mag", "radio", "color_rgb", "lugar", "fecha", "label"]].dropna(subset=["lon", "lat"])
 
 
-def _preparar_etiquetas_sismos(df_sismos, max_etiquetas=12):
-    sismos = _preparar_sismos(df_sismos)
+def _preparar_etiquetas_sismos(df_sismos, max_etiquetas=12, df_fuente=None):
+    sismos = _preparar_sismos(df_fuente if df_fuente is not None else df_sismos)
     if sismos.empty:
         return pd.DataFrame(columns=["lon", "lat", "etiqueta", "mag", "lugar", "fecha", "label"])
     orden = sismos.copy()
@@ -128,17 +142,41 @@ def _preparar_etiquetas_sismos(df_sismos, max_etiquetas=12):
     return orden[["lon", "lat", "etiqueta", "mag", "lugar", "fecha", "label"]]
 
 
+def _cruza_antimeridiano(lon1, lon2):
+    return (lon1 > 90 and lon2 < -90) or (lon1 < -90 and lon2 > 90) or abs(lon2 - lon1) > 120
+
+
+def _dividir_path_antimeridiano(path):
+    if len(path) < 2:
+        return [path]
+    tramos, tramo = [], [list(path[0])]
+    for lon2, lat2 in path[1:]:
+        lon1 = tramo[-1][0]
+        if _cruza_antimeridiano(lon1, lon2):
+            if len(tramo) >= 2:
+                tramos.append(tramo)
+            tramo = [[lon2, lat2]]
+        else:
+            tramo.append([lon2, lat2])
+    if len(tramo) >= 2:
+        tramos.append(tramo)
+    return tramos if tramos else [path]
+
+
 def _paths_tectonicos(segmentos=None):
     segmentos = segmentos or ANILLO_DE_FUEGO
     filas = []
     for seg in segmentos:
-        filas.append({
-            "nombre": seg["nombre"],
-            "tipo": seg.get("tipo", "subduccion"),
-            "path": seg["path"],
-            "color": COLOR_TECTONICA.get(seg.get("tipo", "subduccion"), COLOR_TECTONICA["subduccion"]),
-            "ancho": 4 if seg.get("tipo") == "subduccion" else 3,
-        })
+        color = COLOR_TECTONICA.get(seg.get("tipo", "subduccion"), COLOR_TECTONICA["subduccion"])
+        ancho = 4 if seg.get("tipo") == "subduccion" else 3
+        for tramo in _dividir_path_antimeridiano(seg["path"]):
+            filas.append({
+                "nombre": seg["nombre"],
+                "tipo": seg.get("tipo", "subduccion"),
+                "path": tramo,
+                "color": color,
+                "ancho": ancho,
+            })
     return filas
 
 
@@ -156,6 +194,7 @@ def render_mapa_tectonico(
     segmentos_tectonicos=None,
     mostrar_etiquetas=True,
     max_etiquetas=12,
+    df_etiquetas=None,
 ):
     estacion_color_rgb = estacion_color_rgb or [59, 130, 246, 255]
     sismos = _preparar_sismos(df_sismos)
@@ -184,8 +223,8 @@ def render_mapa_tectonico(
             get_color="color",
             get_width="ancho",
             width_min_pixels=2,
-            pickable=True,
-            auto_highlight=True,
+            pickable=False,
+            auto_highlight=False,
         ))
 
     if not sismos.empty:
@@ -203,7 +242,9 @@ def render_mapa_tectonico(
         ))
 
     if mostrar_etiquetas:
-        etiquetas = _preparar_etiquetas_sismos(df_sismos, max_etiquetas=max_etiquetas)
+        etiquetas = _preparar_etiquetas_sismos(
+            df_sismos, max_etiquetas=max_etiquetas, df_fuente=df_etiquetas or df_sismos,
+        )
         if not etiquetas.empty:
             capas.append(pdk.Layer(
                 "TextLayer",
@@ -254,7 +295,7 @@ def render_mapa_tectonico(
         # La URL raster dark_all/{z}/{x}/{y}.png no carga en pydeck → fondo negro.
         map_style=None,
         tooltip={
-            "html": "<b>M{mag}</b> · {lugar}<br/>{fecha}",
+            "html": "<b>Sismo USGS</b><br/>Magnitud: <b>M{mag}</b><br/>{lugar}<br/>{fecha}",
             "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"},
         },
     )
@@ -290,7 +331,7 @@ def _fallback_st_map(sismos, estacion_lat, estacion_lon, estacion_color_rgb, zoo
 def leyenda_mapa_tectonico():
     return (
         "🟠 Cinturón de Fuego del Pacífico · "
-        "🔴 Sismos M6+ · 🟡 M4.5–5.9 · "
-        "Etiquetas: últimos sismos USGS (M + lugar) · "
+        "🔴 M6.0+ · 🟡 M4.5–5.9 · 🟢 M<4.5 · "
+        "Tooltip USGS: magnitud + lugar + fecha · "
         "🔵 Nodo/estación activa"
     )

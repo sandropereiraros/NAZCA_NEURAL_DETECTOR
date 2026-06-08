@@ -811,7 +811,8 @@ _ANILLO_FUEGO_PATHS = [
     {"path": [[-175, 51], [-165, 55], [-155, 59], [-145, 61], [-135, 58]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[155, 52], [148, 44], [143, 39], [139, 35]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[126, 8], [119, -1], [108, -9], [100, -13], [96, -15]], "color": [255, 90, 40, 210], "ancho": 4},
-    {"path": [[176, -18], [179, -26], [-175, -34], [177, -42]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[176, -18], [178, -22], [179, -26]], "color": [255, 90, 40, 210], "ancho": 4},
+    {"path": [[-178, -30], [-176, -34], [-174, -38], [-172, -42]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[-81, -4], [-77, -12], [-74, -24], [-72, -36], [-74, -48], [-75, -52]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[-108, 16], [-98, 7], [-90, 1], [-84, -5]], "color": [255, 90, 40, 210], "ancho": 4},
     {"path": [[-132, 54], [-122, 42], [-115, 30]], "color": [255, 90, 40, 210], "ancho": 4},
@@ -845,12 +846,22 @@ _NODOS_MUNDO_INLINE = {
 }
 
 
-def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura=400):
+def _color_mag_inline(mag):
+    if mag >= 6.0:
+        return [239, 68, 68, 210]
+    if mag >= 4.5:
+        return [250, 204, 21, 200]
+    return [74, 222, 128, 210]
+
+
+def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura=400, df_etiquetas=None):
     if mapa_tect:
         mapa_tect.render_mapa_tectonico(
-            df_sismos=df_sismos, estacion_lat=est_lat, estacion_lon=est_lon,
+            df_sismos=df_sismos, df_etiquetas=df_etiquetas,
+            estacion_lat=est_lat, estacion_lon=est_lon,
             estacion_label=label, lat_center=est_lat, lon_center=est_lon,
             zoom=zoom, altura=altura, mostrar_anillo=True,
+            max_etiquetas=15 if zoom <= 3 else 12,
         )
         st.caption(mapa_tect.leyenda_mapa_tectonico())
         return
@@ -873,14 +884,33 @@ def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura
                 "lat": float(r["Latitud"] if "Latitud" in r else r["lat"]),
                 "mag": mag, "lugar": lugar, "fecha": fecha,
                 "radio": (max(mag, 2.5) ** 2) * 1800,
-                "color": [239, 68, 68, 210] if mag >= 6 else [250, 204, 21, 200],
+                "color": _color_mag_inline(mag),
                 "label": "Sismo USGS",
             })
-    capas = [pdk.Layer("PathLayer", data=_ANILLO_FUEGO_PATHS, get_path="path", get_color="color", get_width="ancho", width_min_pixels=2)]
+    capas = [pdk.Layer(
+        "PathLayer", data=_ANILLO_FUEGO_PATHS, get_path="path", get_color="color",
+        get_width="ancho", width_min_pixels=2, pickable=False, auto_highlight=False,
+    )]
     if sismos:
-        capas.append(pdk.Layer("ScatterplotLayer", data=sismos, get_position=["lon", "lat"], get_radius="radio", get_fill_color="color", pickable=True))
+        capas.append(pdk.Layer(
+            "ScatterplotLayer", data=sismos, get_position=["lon", "lat"], get_radius="radio",
+            get_fill_color="color", pickable=True, opacity=0.82, stroked=True,
+            get_line_color=[255, 255, 255, 80], line_width_min_pixels=1,
+        ))
+        fuente_etiquetas = []
+        if df_etiquetas is not None and not df_etiquetas.empty:
+            for _, r in df_etiquetas.iterrows():
+                mag = float(r.get("Magnitud", r.get("mag", 4.5)))
+                fuente_etiquetas.append({
+                    "lon": float(r["Longitud"] if "Longitud" in r else r["lon"]),
+                    "lat": float(r["Latitud"] if "Latitud" in r else r["lat"]),
+                    "mag": mag,
+                    "lugar": str(r.get("Lugar", r.get("lugar", ""))),
+                    "fecha": str(r.get("Fecha", r.get("fecha", ""))),
+                })
+        etiquetas_src = fuente_etiquetas or sismos
         etiquetas = []
-        for item in sorted(sismos, key=lambda x: x.get("fecha", ""), reverse=True)[:12]:
+        for item in sorted(etiquetas_src, key=lambda x: x.get("fecha", ""), reverse=True)[:15]:
             lugar_corto = item["lugar"].split(" of ")[-1].split(",")[0].strip() if item["lugar"] else "Sin lugar"
             if len(lugar_corto) > 34:
                 lugar_corto = lugar_corto[:33] + "…"
@@ -901,10 +931,13 @@ def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura
         layers=capas,
         initial_view_state=pdk.ViewState(latitude=est_lat or 10, longitude=est_lon or 120, zoom=zoom),
         map_style=None,
-        tooltip={"html": "<b>M{mag}</b> · {lugar}<br/>{fecha}", "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"}},
+        tooltip={
+            "html": "<b>Sismo USGS</b><br/>Magnitud: <b>M{mag}</b><br/>{lugar}<br/>{fecha}",
+            "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"},
+        },
     )
     st.pydeck_chart(deck, height=altura, use_container_width=True)
-    st.caption("🟠 Cinturón de Fuego del Pacífico · Etiquetas: últimos sismos USGS · 🔵 nodo activo")
+    st.caption("🟠 Cinturón de Fuego · 🔴 M6+ · 🟡 M4.5–5.9 · 🟢 M<4.5 · Tooltip USGS · 🔵 nodo activo")
 
 
 def _fetch_usgs_global_inline():
@@ -948,7 +981,7 @@ def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
     st.dataframe(pd.DataFrame(_CATALOGO_MUNDO), use_container_width=True, hide_index=True)
     df_nodo = filtrar_sismos_estacion(df_g, nodo["lat"], nodo["lon"], radio_km=400)
     st.markdown(f"#### Mapa — Cinturón de Fuego + USGS · Nodo: **{nodo_sel}**")
-    _render_mapa_anillo_fuego(df_nodo, nodo["lat"], nodo["lon"], nodo_sel, zoom=2, altura=420)
+    _render_mapa_anillo_fuego(df_g, nodo["lat"], nodo["lon"], nodo_sel, zoom=2, altura=420, df_etiquetas=df_nodo)
     if modo_demo:
         st.error("MODO DEMO activo en laboratorio mundial.")
 

@@ -753,7 +753,8 @@ def render_mundo_lab(
         st.markdown("#### Mapa global — Cinturón de Fuego + sismos USGS")
         if mapa_tect:
             mapa_tect.render_mapa_tectonico(
-                df_sismos=res["df_local"],
+                df_sismos=df_global,
+                df_etiquetas=res["df_local"],
                 estacion_lat=config["lat"],
                 estacion_lon=config["lon"],
                 estacion_label=nodo_sel,
@@ -763,6 +764,7 @@ def render_mundo_lab(
                 zoom=2,
                 altura=420,
                 mostrar_anillo=True,
+                max_etiquetas=15,
             )
             st.caption(mapa_tect.leyenda_mapa_tectonico())
         else:
@@ -770,7 +772,10 @@ def render_mundo_lab(
             if not res["df_local"].empty:
                 sm = res["df_local"].rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
                 sm["size"] = (sm["mag"].clip(lower=4.0) ** 2) * 14
-                sm["color"] = np.where(sm["mag"] >= 6.0, "#ef4444", "#facc15")
+                sm["color"] = np.where(
+                    sm["mag"] >= 6.0, "#ef4444",
+                    np.where(sm["mag"] >= 4.5, "#facc15", "#4ade80"),
+                )
                 mapa_df = pd.concat([mapa_df, sm[["lat", "lon", "size", "color"]]], ignore_index=True)
             st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=3)
 

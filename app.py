@@ -1536,7 +1536,10 @@ with tab_vivo:
             if not df_sismos.empty:
                 sismos_mapa = df_sismos.rename(columns={"Latitud": "lat", "Longitud": "lon"})
                 sismos_mapa["size"] = (sismos_mapa["Magnitud"].clip(lower=2.5) ** 2) * 12
-                sismos_mapa["color"] = np.where(sismos_mapa["Magnitud"] >= 4.0, "#ef4444", "#facc15")
+                sismos_mapa["color"] = np.where(
+                    sismos_mapa["Magnitud"] >= 6.0, "#ef4444",
+                    np.where(sismos_mapa["Magnitud"] >= 4.5, "#facc15", "#4ade80"),
+                )
                 mapa_df = pd.concat([mapa_df, sismos_mapa[["lat", "lon", "size", "color"]]], ignore_index=True)
             st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=4)
 
