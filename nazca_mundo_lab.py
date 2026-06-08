@@ -5,6 +5,7 @@ Poner MODULO_MUNDO_ACTIVO = False o eliminar este archivo para desactivar sin af
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import random
@@ -16,15 +17,24 @@ import pandas as pd
 import requests
 import streamlit as st
 
-try:
-    import nazca_mapa_tectonico as mapa_tect
-except ImportError:
-    mapa_tect = None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-try:
-    import nazca_informes_pdf as informes_pdf
-except ImportError:
-    informes_pdf = None
+
+def _cargar_modulo_auxiliar(nombre, archivo):
+    ruta = os.path.join(BASE_DIR, archivo)
+    if not os.path.exists(ruta):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(nombre, ruta)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+mapa_tect = _cargar_modulo_auxiliar("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
+informes_pdf = _cargar_modulo_auxiliar("nazca_informes_pdf", "nazca_informes_pdf.py")
 
 # ==============================================================================
 # INTERRUPTOR GLOBAL — False = Chile sigue igual, pestaña MUNDO no aparece
@@ -32,8 +42,45 @@ except ImportError:
 MODULO_MUNDO_ACTIVO = True
 MUNDO_LAB_VERSION = "v4.0-sin-chile"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ESCENARIO_DEMO_MUNDO = {
+    "nodo": "Filipinas · Mindanao (complejo)",
+    "evento_ref": "Mindanao 2026",
+    "mag_ref": "M7.8",
+    "descripcion": (
+        "Ejemplo didáctico: nodo Filipinas–Mindanao con firma de 14 días previa al evento de referencia. "
+        "Cumple umbrales LAB experimentales. No es predicción ni alerta oficial."
+    ),
+    "b_value": 0.67,
+    "sismos_locales_14d": 31,
+    "sismos_global_14d": 38,
+    "insar": 82.0,
+    "cond": 4.1,
+    "shoa": 14.0,
+    "presion": 1010.8,
+    "termico": 2.0,
+    "kp": 1,
+}
+
 CACHE_DIR = os.path.join(BASE_DIR, ".nazca_cache")
+
+
+def _df_ui(df):
+    if informes_pdf and hasattr(informes_pdf, "df_ui_seguro"):
+        return informes_pdf.df_ui_seguro(df)
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    out = df.copy()
+    for col in out.columns:
+        out[col] = out[col].apply(lambda v: "" if pd.isna(v) else str(v))
+    return out
+
+
+def _usar_mapa_nativo(modo_demo=False):
+    env = os.environ.get("STREAMLIT_RUNTIME_ENV", "").lower()
+    en_cloud = env in ("cloud", "community", "production") or bool(os.environ.get("STREAMLIT_SHARING"))
+    if os.environ.get("NAZCA_USAR_PYDECK", "").strip() == "1" and not en_cloud:
+        return False
+    return True
 EVIDENCIA_MUNDO_CSV = os.path.join(BASE_DIR, "nazca_evidencia_mundo.csv")
 CHILE_TZ = ZoneInfo("America/Santiago")
 CHILE_TZ_LABEL = "Chile continental (UTC-4)"
@@ -235,8 +282,8 @@ def _ref_evento_pdf(nodo_sel, mejor_ev):
 def _panel_informes_pdf_mundo(nodo_sel, config, res, ref_pdf, df_ev, coincidencias, consultado_usgs):
     st.markdown("#### 📄 Informes comparativos 14D")
     st.caption(
-        "Vista previa en pantalla + descarga PDF. Compara la lectura actual con la firma de "
-        "14 dias previos al gran sismo de referencia del nodo."
+        "Compara la lectura actual con la firma de 14 días previos al gran sismo de referencia del nodo. "
+        "Descarga el PDF con el botón inferior."
     )
     if not informes_pdf:
         st.warning("Falta `nazca_informes_pdf.py` en el servidor. Sube el archivo y haz Reboot.")
@@ -244,7 +291,7 @@ def _panel_informes_pdf_mundo(nodo_sel, config, res, ref_pdf, df_ev, coincidenci
 
     st.markdown("##### Vista previa — tabla comparativa")
     st.dataframe(
-        informes_pdf.tabla_comparativa_mundo(res, ref_pdf),
+        _df_ui(informes_pdf.tabla_comparativa_mundo(res, ref_pdf)),
         use_container_width=True,
         hide_index=True,
     )
@@ -260,19 +307,30 @@ def _panel_informes_pdf_mundo(nodo_sel, config, res, ref_pdf, df_ev, coincidenci
         ahora=pd.Timestamp(ahora_chile()),
         logo_path=os.path.join(BASE_DIR, "assets", "nazca_logo.png"),
     )
-    col_dl, col_prev = st.columns(2)
-    with col_dl:
+    slug = sanitizar_slug(nodo_sel)
+    nombre_pdf = f"comparativa_mundo_{slug}.pdf"
+    _boton_pdf = getattr(informes_pdf, "boton_descarga_pdf", None) or getattr(
+        informes_pdf, "render_vista_previa_pdf", None
+    )
+    if _boton_pdf:
+        if getattr(informes_pdf, "boton_descarga_pdf", None):
+            informes_pdf.boton_descarga_pdf(
+                pdf_bytes,
+                nombre_pdf,
+                boton_key=f"dl_pdf_mundo_{slug}",
+                etiqueta="⬇️ Informe comparativo MUNDO LAB (PDF)",
+            )
+        else:
+            informes_pdf.render_vista_previa_pdf(pdf_bytes, nombre_pdf, key=f"dl_pdf_mundo_{slug}")
+    else:
         st.download_button(
-            "⬇️ Descargar informe comparativo PDF",
+            "⬇️ Informe comparativo MUNDO LAB (PDF)",
             pdf_bytes,
-            f"comparativa_mundo_{sanitizar_slug(nodo_sel)}.pdf",
+            nombre_pdf,
             "application/pdf",
             use_container_width=True,
-            key=f"dl_pdf_mundo_{sanitizar_slug(nodo_sel)}",
+            key=f"dl_pdf_mundo_fb_{slug}",
         )
-    with col_prev:
-        with st.expander("👁️ Ver PDF en la página", expanded=True):
-            st.markdown(informes_pdf.html_vista_previa_pdf(pdf_bytes), unsafe_allow_html=True)
 
 
 def listar_nodos_mundo():
@@ -464,6 +522,11 @@ def filtrar_sismos_nodo(df_sismos, lat, lon, radio_km):
 
 
 def telemetria_nodo(nodo, config, total_sismos, ttl_seg, modo_sat, modo_demo=False):
+    if modo_demo:
+        esc = ESCENARIO_DEMO_MUNDO
+        origen = "SAT MUNDO LAB DEMO" if modo_sat else f"DEMO · firma {esc['evento_ref']}"
+        return esc["shoa"], esc["cond"], esc["presion"], esc["termico"], esc["insar"], origen
+
     tipo = config.get("tipo_falla", "subduccion")
     perfil = TELEMETRIA_POR_TIPO.get(tipo, TELEMETRIA_POR_TIPO["subduccion"])
     bloque = int(ahora_chile().timestamp() // ttl_seg)
@@ -678,13 +741,48 @@ def construir_calibracion_mundo(df_global, ttl_seg, modo_sat, kp, consultado_usg
     return pd.DataFrame(filas)
 
 
+def generar_sismos_demo_mundo(config, escenario=None):
+    esc = escenario or ESCENARIO_DEMO_MUNDO
+    rng = random.Random(f"demo_mundo_{esc['evento_ref']}")
+    ahora = ahora_chile()
+    filas = []
+    lugar = f"DEMO · enjambre pre-{esc['evento_ref']} — ejemplo LAB"
+    for i in range(esc["sismos_locales_14d"]):
+        if i < 6:
+            mag = round(rng.uniform(5.4, 6.8), 1)
+        elif i < 16:
+            mag = round(rng.uniform(4.5, 5.4), 1)
+        else:
+            mag = round(rng.uniform(4.0, 4.9), 1)
+        filas.append({
+            "Magnitud": mag,
+            "Lugar": lugar,
+            "Latitud": config["lat"] + rng.uniform(-0.6, 0.6),
+            "Longitud": config["lon"] + rng.uniform(-0.6, 0.6),
+            "Fecha": (ahora - timedelta(hours=rng.uniform(0, 14 * 24))).strftime("%Y-%m-%d %H:%M"),
+        })
+    df = pd.DataFrame(filas).sort_values("Fecha", ascending=False)
+    if not df.empty:
+        df["Distancia_km"] = df.apply(
+            lambda r: distancia_km(config["lat"], config["lon"], r["Latitud"], r["Longitud"]), axis=1,
+        )
+    return df
+
+
 def procesar_nodo(nodo, config, df_global, ttl_seg, modo_sat, kp, modo_demo=False):
-    mag_min = config.get("mag_min_local", MAG_MIN_GLOBAL)
-    df_zona = df_global[df_global["Magnitud"] >= mag_min] if not df_global.empty else df_global
-    df_local = filtrar_sismos_nodo(df_zona, config["lat"], config["lon"], config["radio_km"])
-    total_local = len(df_local)
-    total_global = len(df_global)
-    b_val = calcular_b_value(df_local)
+    if modo_demo:
+        esc = ESCENARIO_DEMO_MUNDO
+        df_local = generar_sismos_demo_mundo(config, esc)
+        total_local = esc["sismos_locales_14d"]
+        total_global = esc["sismos_global_14d"]
+        b_val = esc["b_value"]
+    else:
+        mag_min = config.get("mag_min_local", MAG_MIN_GLOBAL)
+        df_zona = df_global[df_global["Magnitud"] >= mag_min] if not df_global.empty else df_global
+        df_local = filtrar_sismos_nodo(df_zona, config["lat"], config["lon"], config["radio_km"])
+        total_local = len(df_local)
+        total_global = len(df_global)
+        b_val = calcular_b_value(df_local)
     shoa, cond, pres, termico, insar, origen = telemetria_nodo(
         nodo, config, total_local, ttl_seg, modo_sat, modo_demo=modo_demo,
     )
@@ -731,7 +829,13 @@ def render_mundo_lab(
         "Referencias: Japón, Filipinas, Indonesia, Alaska, Turquía, Nepal y más."
     )
     if modo_demo:
-        st.error("MODO DEMO MUNDO — telemetría amplificada para prueba de respuesta LAB.")
+        nodo_sel = ESCENARIO_DEMO_MUNDO["nodo"]
+        if nodo_sel not in NODOS_MUNDO_CONFIG:
+            nodo_sel = nodo_por_defecto()
+        config = NODOS_MUNDO_CONFIG[nodo_sel]
+        tipo = config["tipo_falla"]
+        st.error("MODO DEMO MUNDO — ejemplo experimental, no alerta oficial.")
+        st.info(ESCENARIO_DEMO_MUNDO["descripcion"])
 
     df_global, consultado_usgs, api_nueva = sismos_global_cacheados(ttl_seg, forzar=forzar)
     df_global = filtrar_eventos_fuera_chile(df_global)
@@ -761,7 +865,7 @@ def render_mundo_lab(
         "La columna ◉ marca el nodo seleccionado en CORE NETWORK."
     )
     st.dataframe(
-        catalogo_referencia_mundial(nodo_activo=nodo_sel),
+        _df_ui(catalogo_referencia_mundial(nodo_activo=nodo_sel)),
         use_container_width=True,
         hide_index=True,
         height=280,
@@ -814,7 +918,7 @@ def render_mundo_lab(
     pesos = PESOS_POR_TIPO.get(tipo, {})
     gate = COMPUERTA_POR_TIPO.get(tipo, {})
     with st.expander("Parámetros regionales activos"):
-        st.dataframe(pd.DataFrame([
+        df_params_mundo = pd.DataFrame([
             {"Parámetro": k, "Peso": v} for k, v in pesos.items()
         ] + [
             {"Parámetro": "umbral_critico", "Peso": config["umbral_critico"]},
@@ -822,13 +926,26 @@ def render_mundo_lab(
             {"Parámetro": "compuerta_insar_min", "Peso": gate.get("insar_min")},
             {"Parámetro": "compuerta_sismos_min", "Peso": gate.get("sismos_min")},
             {"Parámetro": "b_critico", "Peso": gate.get("b_critico")},
-        ]), use_container_width=True, hide_index=True)
+        ])
+        st.dataframe(_df_ui(df_params_mundo), use_container_width=True, hide_index=True)
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
         st.markdown("#### Mapa global — Cinturón de Fuego + sismos USGS")
         mapa_renderizado = False
-        if mapa_tect:
+        if _usar_mapa_nativo(modo_demo):
+            st.info(
+                "Mapa desactivado en MUNDO (LAB) en web publica. "
+                "Usa **Escaneo en vivo** para el mapa Chile o la tabla de sismos aqui."
+            )
+            if not res["df_local"].empty:
+                st.dataframe(
+                    _df_ui(res["df_local"][["Magnitud", "Lugar", "Fecha", "Distancia_km"]].head(15)),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            mapa_renderizado = True
+        elif mapa_tect:
             try:
                 mapa_tect.render_mapa_tectonico(
                     df_sismos=df_global,
@@ -843,8 +960,10 @@ def render_mundo_lab(
                     altura=420,
                     mostrar_anillo=True,
                     max_etiquetas=15,
+                    mapa_nativo=_usar_mapa_nativo(modo_demo),
                 )
-                st.caption(mapa_tect.leyenda_mapa_tectonico())
+                if not _usar_mapa_nativo(modo_demo):
+                    st.caption(mapa_tect.leyenda_mapa_tectonico())
                 mapa_renderizado = True
             except Exception as exc:
                 st.warning(f"Mapa pydeck no disponible ({exc}). Mostrando vista simplificada.")
@@ -858,7 +977,10 @@ def render_mundo_lab(
                     np.where(sm["mag"] >= 4.5, "#facc15", "#4ade80"),
                 )
                 mapa_df = pd.concat([mapa_df, sm[["lat", "lon", "size", "color"]]], ignore_index=True)
-            st.map(mapa_df, latitude="lat", longitude="lon", size="size", color="color", zoom=3)
+            if mapa_tect:
+                mapa_tect.st_map_minimo(mapa_df.to_dict("records"), zoom=3)
+            else:
+                st.map(mapa_df[["lat", "lon"]], latitude="lat", longitude="lon")
 
     with col_tabla:
         st.caption(
@@ -867,17 +989,17 @@ def render_mundo_lab(
         )
         cols = ["Magnitud", "Lugar", "Fecha", "Distancia_km"]
         st.dataframe(
-            res["df_local"][cols] if not res["df_local"].empty else pd.DataFrame(columns=cols),
+            _df_ui(res["df_local"][cols] if not res["df_local"].empty else pd.DataFrame(columns=cols)),
             height=220, use_container_width=True,
         )
 
     st.markdown(f"#### Referencia del nodo activo: {config['pais']}")
     df_ref_nodo = referencia_nodo_activo(nodo_sel)
     if not df_ref_nodo.empty:
-        st.dataframe(df_ref_nodo, use_container_width=True, hide_index=True)
+        st.dataframe(_df_ui(df_ref_nodo), use_container_width=True, hide_index=True)
 
     st.markdown("##### Match calculado vs referencia del nodo (no Chile)")
-    st.dataframe(res["df_match"], use_container_width=True, hide_index=True)
+    st.dataframe(_df_ui(res["df_match"]), use_container_width=True, hide_index=True)
     if res["mejor_ev"] and "Maule" not in res["mejor_ev"] and "Iquique" not in res["mejor_ev"]:
         st.caption(f"Patrón más parecido en este nodo: **{res['mejor_ev']}** ({res['mejor_match']:.1f}%)")
 
@@ -885,7 +1007,7 @@ def render_mundo_lab(
     df_cal = construir_calibracion_mundo(
         df_global, ttl_seg, modo_sat, kp, consultado_usgs, modo_demo=modo_demo,
     )
-    st.dataframe(df_cal, use_container_width=True, hide_index=True)
+    st.dataframe(_df_ui(df_cal), use_container_width=True, hide_index=True)
     st.download_button(
         "Descargar calibración MUNDO CSV",
         df_cal.to_csv(index=False).encode("utf-8-sig"),
@@ -909,8 +1031,8 @@ def render_mundo_lab(
 
     if not df_ev.empty:
         st.dataframe(
-            df_ev[["fecha_hora", "nodo", "tipo_falla", "nivel", "puntaje", "match_ref", "hash_evidencia"]]
-            .tail(20).sort_values("fecha_hora", ascending=False),
+            _df_ui(df_ev[["fecha_hora", "nodo", "tipo_falla", "nivel", "puntaje", "match_ref", "hash_evidencia"]]
+            .tail(20).sort_values("fecha_hora", ascending=False)),
             use_container_width=True, hide_index=True,
         )
         st.download_button(
@@ -922,7 +1044,7 @@ def render_mundo_lab(
         )
 
     if not coincidencias.empty:
-        st.dataframe(coincidencias, use_container_width=True, hide_index=True)
+        st.dataframe(_df_ui(coincidencias), use_container_width=True, hide_index=True)
     else:
         st.caption("Sin coincidencias LAB bajo criterios actuales.")
 

@@ -10,9 +10,11 @@ Esta integracion permite que los registros hechos desde la web queden persistent
 
 ## 2. Copiar codigo
 
-1. Copia el contenido de `scripts/google_apps_script_subscribers.gs`.
-2. Pegalo en `Code.gs` dentro de Apps Script.
-3. Guarda el proyecto.
+1. Abre en tu PC el archivo `scripts/google_apps_script_subscribers.gs`.
+2. Selecciona **todo el codigo** (debe empezar con `const SHEET_NAME = 'suscriptores';` y terminar con `function doGet()`).
+3. Pegalo en `Code.gs` dentro de Apps Script.
+4. **No pegues** la ruta del archivo (`scripts/google_apps_script...`). Eso provoca `ReferenceError: scripts is not defined`.
+5. Guarda el proyecto.
 
 ## 3. Configurar clave privada
 

@@ -1,0 +1,27 @@
+name: Vigilancia Chile NAZCA
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  vigilar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install pandas numpy requests
+
+      - name: Ejecutar vigilancia automatica
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUBSCRIBERS_WEBAPP_URL: ${{ secrets.SUBSCRIBERS_WEBAPP_URL }}
+          SUBSCRIBERS_API_KEY: ${{ secrets.SUBSCRIBERS_API_KEY }}
+        run: python scripts/vigilancia_automatica.py --ttl-horas 6

@@ -12,9 +12,11 @@ function getSheet() {
   if (!sheet) {
     sheet = spreadsheet.insertSheet(SHEET_NAME);
   }
-  const headers = ['chat_id', 'nombre', 'estacion', 'nivel_minimo', 'activo', 'registrado', 'actualizado'];
+  const headers = ['chat_id', 'nombre', 'estacion', 'nivel_minimo', 'activo', 'registrado', 'actualizado', 'canal'];
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(headers);
+  } else if (sheet.getLastColumn() < 8) {
+    sheet.getRange(1, 8).setValue('canal');
   }
   return sheet;
 }
@@ -40,6 +42,7 @@ function listSubscribers_() {
       activo: String(row[4]).toLowerCase() !== 'false',
       registrado: String(row[5] || ''),
       actualizado: String(row[6] || ''),
+      canal: String(row[7] || 'chile').trim().toLowerCase(),
     }));
 }
 
@@ -56,7 +59,8 @@ function upsertSubscriber_(subscriber) {
   const nivel = String(subscriber.nivel_minimo || 'AMARILLO').trim();
   const activo = subscriber.activo !== false;
   const registrado = String(subscriber.registrado || now);
-  const row = [chatId, nombre, estacion, nivel, activo, registrado, now];
+  const canal = String(subscriber.canal || 'chile').trim().toLowerCase();
+  const row = [chatId, nombre, estacion, nivel, activo, registrado, now, canal];
 
   const values = sheet.getDataRange().getValues();
   for (let i = 1; i < values.length; i++) {

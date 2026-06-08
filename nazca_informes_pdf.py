@@ -13,6 +13,27 @@ from fpdf import FPDF
 CHILE_TZ_LABEL = "Chile continental (UTC-4)"
 
 
+def _texto_celda(valor):
+    if valor is None:
+        return ""
+    try:
+        if pd.isna(valor):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(valor)
+
+
+def df_ui_seguro(df):
+    """Evita fallos PyArrow cuando una columna mezcla números y texto."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    out = df.copy()
+    for col in out.columns:
+        out[col] = out[col].map(_texto_celda)
+    return out
+
+
 def sanitizar_texto(texto):
     texto = "" if texto is None else str(texto)
     reemplazos = {
@@ -149,7 +170,7 @@ def filas_comparativa_mundo(res, ref_evento=None):
 
 
 def tabla_comparativa_mundo(res, ref_evento=None):
-    return pd.DataFrame(filas_comparativa_mundo(res, ref_evento))
+    return df_ui_seguro(pd.DataFrame(filas_comparativa_mundo(res, ref_evento)))
 
 
 def filas_comparativa_chile(b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, ref_evento=None):
@@ -174,16 +195,31 @@ def filas_comparativa_chile(b_val, insar, cond, shoa, total_sismos, total_sismos
 
 def tabla_comparativa_chile(b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, eventos_m7, mejor_ev):
     ref = _ref_por_nombre(eventos_m7, mejor_ev) or (eventos_m7[0] if eventos_m7 else {})
-    return pd.DataFrame(filas_comparativa_chile(b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, ref))
+    return df_ui_seguro(pd.DataFrame(filas_comparativa_chile(b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, ref)))
 
 
-def html_vista_previa_pdf(pdf_bytes, alto=500):
-    import base64
-    b64 = base64.b64encode(pdf_bytes).decode("ascii")
-    return (
-        f'<iframe src="data:application/pdf;base64,{b64}" '
-        f'width="100%" height="{alto}" style="border:1px solid #334155;border-radius:8px;"></iframe>'
+def boton_descarga_pdf(pdf_bytes, nombre_archivo, boton_key, etiqueta="⬇️ Descargar informe PDF"):
+    """Un solo botón de descarga — sin iframe (Chrome/Cloud lo bloquean)."""
+    import streamlit as st
+
+    if not pdf_bytes:
+        st.warning("No se pudo generar el informe PDF.")
+        return
+    tam_kb = max(1, len(pdf_bytes) // 1024)
+    st.success(f"Informe listo: **{nombre_archivo}** ({tam_kb} KB)")
+    st.caption("Pulsa el botón para descargar y ábrelo con Adobe, Edge o el visor de Windows.")
+    st.download_button(
+        etiqueta,
+        pdf_bytes,
+        nombre_archivo,
+        "application/pdf",
+        use_container_width=True,
+        key=boton_key,
     )
+
+
+def render_vista_previa_pdf(pdf_bytes, nombre_archivo="informe.pdf", key="pdf_previa"):
+    boton_descarga_pdf(pdf_bytes, nombre_archivo, boton_key=key)
 
 
 def generar_pdf_comparativa_mundo(

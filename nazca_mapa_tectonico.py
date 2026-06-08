@@ -98,6 +98,31 @@ COLOR_MAG_MEDIA = [250, 204, 21, 200]    # 🟡 M4.5–5.9
 COLOR_MAG_BAJA = [74, 222, 128, 210]     # 🟢 M<4.5 — criterio verde Chile
 
 
+def pydeck_chart_compat(deck, altura=430):
+    """pydeck sin key — versiones antiguas de Streamlit no aceptan key en st.map/pydeck."""
+    st.pydeck_chart(deck, height=altura, use_container_width=True)
+
+
+def st_map_minimo(puntos, zoom=None, max_puntos=80):
+    """Solo lat/lon — evita removeChild en Streamlit Cloud con size/color."""
+    if not puntos:
+        st.caption("Sin datos para mapa.")
+        return
+    df = pd.DataFrame(puntos).dropna(subset=["lat", "lon"])
+    if df.empty:
+        st.caption("Sin datos para mapa.")
+        return
+    if len(df) > max_puntos:
+        df = df.head(max_puntos)
+    try:
+        if zoom is not None:
+            st.map(df, latitude="lat", longitude="lon", zoom=zoom)
+        else:
+            st.map(df, latitude="lat", longitude="lon")
+    except TypeError:
+        st.map(df, latitude="lat", longitude="lon")
+
+
 def color_por_magnitud(mag):
     m = float(mag or 0)
     if m >= 6.0:
@@ -187,6 +212,15 @@ def _paths_tectonicos(segmentos=None):
     return filas
 
 
+def _forzar_mapa_nativo_por_defecto(mapa_nativo):
+    import os
+    env = os.environ.get("STREAMLIT_RUNTIME_ENV", "").lower()
+    en_cloud = env in ("cloud", "community", "production") or bool(os.environ.get("STREAMLIT_SHARING"))
+    if os.environ.get("NAZCA_USAR_PYDECK", "").strip() == "1" and not en_cloud:
+        return mapa_nativo
+    return True
+
+
 def render_mapa_tectonico(
     df_sismos=None,
     estacion_lat=None,
@@ -202,9 +236,16 @@ def render_mapa_tectonico(
     mostrar_etiquetas=True,
     max_etiquetas=12,
     df_etiquetas=None,
+    mapa_nativo=False,
 ):
+    mapa_nativo = _forzar_mapa_nativo_por_defecto(mapa_nativo)
     estacion_color_rgb = estacion_color_rgb or [59, 130, 246, 255]
     sismos = _preparar_sismos(df_sismos)
+
+    if mapa_nativo:
+        _fallback_st_map(sismos, estacion_lat, estacion_lon, estacion_color_rgb, zoom)
+        st.caption("Mapa nativo Streamlit — estable en navegador y Streamlit Cloud.")
+        return False
 
     if lat_center is None or lon_center is None:
         if estacion_lat is not None and estacion_lon is not None:
@@ -307,7 +348,7 @@ def render_mapa_tectonico(
         },
     )
 
-    st.pydeck_chart(deck, height=altura, use_container_width=True)
+    pydeck_chart_compat(deck, altura=altura)
     return True
 
 
@@ -327,11 +368,8 @@ def _fallback_st_map(sismos, estacion_lat, estacion_lon, estacion_color_rgb, zoo
                 "size": max(30, row["mag"] ** 2 * 10),
                 "color": f"#{r:02x}{g:02x}{b:02x}",
             })
-    if filas:
-        st.map(pd.DataFrame(filas), latitude="lat", longitude="lon", size="size", color="color", zoom=zoom)
-    else:
-        st.caption("Sin datos para mapa.")
-    st.caption("Instala pydeck para ver la línea de fuego tectónica en el mapa.")
+    st_map_minimo(filas, zoom=zoom)
+    st.caption("Mapa simplificado (lat/lon) — estable en navegador y Streamlit Cloud.")
     return False
 
 
