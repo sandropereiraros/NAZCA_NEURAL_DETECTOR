@@ -14,7 +14,7 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-08-v5"
+APP_BUILD = "2026-06-08-v6"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 

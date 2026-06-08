@@ -21,6 +21,11 @@ try:
 except ImportError:
     mapa_tect = None
 
+try:
+    import nazca_informes_pdf as informes_pdf
+except ImportError:
+    informes_pdf = None
+
 # ==============================================================================
 # INTERRUPTOR GLOBAL — False = Chile sigue igual, pestaña MUNDO no aparece
 # ==============================================================================
@@ -208,6 +213,66 @@ COMPUERTA_POR_TIPO = {
     "colision": {"insar_min": 45.0, "sismos_min": 1, "b_critico": 0.60},
     "complejo": {"insar_min": 45.0, "sismos_min": 2, "b_critico": 0.68},
 }
+
+
+def sanitizar_slug(texto):
+    import re
+    limpio = re.sub(r"[^\w\s-]", "", str(texto).lower())
+    return re.sub(r"[-\s]+", "_", limpio).strip("_")[:40] or "nodo"
+
+
+def _ref_evento_pdf(nodo_sel, mejor_ev):
+    ref = None
+    for ev in EVENTOS_REF_MUNDO.get(nodo_sel, []):
+        if ev["evento"] == mejor_ev:
+            ref = ev
+            break
+    if ref is None and EVENTOS_REF_MUNDO.get(nodo_sel):
+        ref = EVENTOS_REF_MUNDO[nodo_sel][0]
+    return ref
+
+
+def _panel_informes_pdf_mundo(nodo_sel, config, res, ref_pdf, df_ev, coincidencias, consultado_usgs):
+    st.markdown("#### 📄 Informes comparativos 14D")
+    st.caption(
+        "Vista previa en pantalla + descarga PDF. Compara la lectura actual con la firma de "
+        "14 dias previos al gran sismo de referencia del nodo."
+    )
+    if not informes_pdf:
+        st.warning("Falta `nazca_informes_pdf.py` en el servidor. Sube el archivo y haz Reboot.")
+        return
+
+    st.markdown("##### Vista previa — tabla comparativa")
+    st.dataframe(
+        informes_pdf.tabla_comparativa_mundo(res, ref_pdf),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    pdf_bytes = informes_pdf.generar_pdf_comparativa_mundo(
+        nodo_sel=nodo_sel,
+        config=config,
+        res=res,
+        consultado_usgs=consultado_usgs,
+        ref_evento=ref_pdf,
+        df_evidencia=df_ev,
+        coincidencias=coincidencias,
+        ahora=pd.Timestamp(ahora_chile()),
+        logo_path=os.path.join(BASE_DIR, "assets", "nazca_logo.png"),
+    )
+    col_dl, col_prev = st.columns(2)
+    with col_dl:
+        st.download_button(
+            "⬇️ Descargar informe comparativo PDF",
+            pdf_bytes,
+            f"comparativa_mundo_{sanitizar_slug(nodo_sel)}.pdf",
+            "application/pdf",
+            use_container_width=True,
+            key=f"dl_pdf_mundo_{sanitizar_slug(nodo_sel)}",
+        )
+    with col_prev:
+        with st.expander("👁️ Ver PDF en la página", expanded=True):
+            st.markdown(informes_pdf.html_vista_previa_pdf(pdf_bytes), unsafe_allow_html=True)
 
 
 def listar_nodos_mundo():
@@ -735,6 +800,17 @@ def render_mundo_lab(
     c4.metric("Sismos local", res["total_local"])
     c5.metric("Match ref.", f"{res['mejor_match']:.1f}%")
 
+    ref_pdf = _ref_evento_pdf(nodo_sel, res["mejor_ev"])
+    df_ev_preview = leer_evidencia_mundo()
+    eventos_val_preview = df_global.copy()
+    if not eventos_val_preview.empty:
+        eventos_val_preview["fecha_dt"] = pd.to_datetime(eventos_val_preview["Fecha"], errors="coerce")
+        eventos_val_preview = eventos_val_preview[eventos_val_preview["Magnitud"] >= 5.5].dropna(subset=["fecha_dt"])
+    coincidencias_preview = evaluar_coincidencias_mundo(df_ev_preview, eventos_val_preview)
+    _panel_informes_pdf_mundo(
+        nodo_sel, config, res, ref_pdf, df_ev_preview, coincidencias_preview, consultado_usgs,
+    )
+
     pesos = PESOS_POR_TIPO.get(tipo, {})
     gate = COMPUERTA_POR_TIPO.get(tipo, {})
     with st.expander("Parámetros regionales activos"):
@@ -819,12 +895,12 @@ def render_mundo_lab(
     )
 
     st.markdown("#### Evidencia LAB mundial")
-    df_ev = leer_evidencia_mundo()
+    df_ev = df_ev_preview
     eventos_val = df_global.copy()
     if not eventos_val.empty:
         eventos_val["fecha_dt"] = pd.to_datetime(eventos_val["Fecha"], errors="coerce")
         eventos_val = eventos_val[eventos_val["Magnitud"] >= 5.5].dropna(subset=["fecha_dt"])
-    coincidencias = evaluar_coincidencias_mundo(df_ev, eventos_val)
+    coincidencias = coincidencias_preview
 
     e1, e2, e3 = st.columns(3)
     e1.metric("Snapshots LAB", len(df_ev))

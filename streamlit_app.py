@@ -14,7 +14,7 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-08-v5"
+APP_BUILD = "2026-06-08-v6"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -33,6 +33,7 @@ def _cargar_modulo_local(nombre, archivo):
 
 mundo_lab, _err_mundo = _cargar_modulo_local("nazca_mundo_lab", "nazca_mundo_lab.py")
 mapa_tect, _err_mapa = _cargar_modulo_local("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
+informes_pdf, _err_informes = _cargar_modulo_local("nazca_informes_pdf", "nazca_informes_pdf.py")
 
 # ==============================================================================
 # CONFIGURACIÓN
@@ -1406,12 +1407,14 @@ if admin_activo:
     _ver_mundo = getattr(mundo_lab, "MUNDO_LAB_VERSION", None) if mundo_lab else None
     st.sidebar.caption(
         f"Build app: **{APP_BUILD}** · MUNDO: **{_ver_mundo or 'NO'}** · "
-        f"Mapa: **{'OK' if mapa_tect else 'NO'}**"
+        f"Mapa: **{'OK' if mapa_tect else 'NO'}** · PDF: **{'OK' if informes_pdf else 'NO'}**"
     )
     if _err_mundo:
         st.sidebar.error(_err_mundo)
     if _err_mapa:
         st.sidebar.warning(_err_mapa)
+    if _err_informes:
+        st.sidebar.warning(_err_informes)
 elif admin_pin:
     st.sidebar.warning("PIN admin incorrecto.")
 
@@ -1603,10 +1606,10 @@ st.caption(
     f"Build **{APP_BUILD}** | Enlace: **{canal}** | Caché APIs: **{intervalo}** | "
     f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}**"
 )
-if not mundo_lab or not mapa_tect:
+if not mundo_lab or not mapa_tect or not informes_pdf:
     st.warning(
         "Deploy incompleto en el servidor. Deben existir en GitHub: "
-        "`nazca_mundo_lab.py`, `nazca_mapa_tectonico.py` y `pydeck` en requirements.txt. "
+        "`nazca_mundo_lab.py`, `nazca_mapa_tectonico.py`, `nazca_informes_pdf.py` y `pydeck` en requirements.txt. "
         "Luego Reboot en Streamlit Cloud."
     )
 
@@ -1731,20 +1734,54 @@ with tab_vivo:
             height=200, use_container_width=True,
         )
 
-    if st.button("Generar PDF", use_container_width=True):
-        st.session_state["pdf"] = generar_pdf(
-            estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp,
-            config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
-            total_sismos_chile, consultado_usgs, consultado_noaa, nivel_alerta=nivel_alerta, modo_demo=modo_demo,
-        )
-    if st.session_state.get("pdf"):
-        st.download_button(
-            "Guardar PDF",
-            st.session_state["pdf"],
-            f"Informe_Tecnico_Nazca_{config['id']}.pdf",
-            "application/pdf",
-            use_container_width=True,
-        )
+    st.markdown("#### 📄 Informes PDF")
+    col_pdf1, col_pdf2 = st.columns(2)
+    with col_pdf1:
+        if st.button("Generar PDF técnico", use_container_width=True):
+            st.session_state["pdf"] = generar_pdf(
+                estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp,
+                config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
+                total_sismos_chile, consultado_usgs, consultado_noaa, nivel_alerta=nivel_alerta, modo_demo=modo_demo,
+            )
+        if st.session_state.get("pdf"):
+            st.download_button(
+                "⬇️ Guardar PDF técnico",
+                st.session_state["pdf"],
+                f"Informe_Tecnico_Nazca_{config['id']}.pdf",
+                "application/pdf",
+                use_container_width=True,
+            )
+    with col_pdf2:
+        if informes_pdf:
+            st.markdown("##### Comparativa 14D vs gran sismo Chile")
+            st.dataframe(
+                informes_pdf.tabla_comparativa_chile(
+                    b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, EVENTOS_M7, mejor_ev,
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            ult_local = df_sismos_local.iloc[0].to_dict() if not df_sismos_local.empty else None
+            pdf_comp_chile = informes_pdf.generar_pdf_comparativa_chile(
+                estacion=estacion_sel, config=config, puntaje=puntaje, estado=estado,
+                nivel_alerta=nivel_alerta, b_val=b_val, insar=insar, cond=cond, shoa=shoa,
+                total_sismos=total_sismos, total_sismos_chile=total_sismos_chile,
+                mejor_ev=mejor_ev, mejor_match=mejor_match, consultado_usgs=consultado_usgs,
+                eventos_m7=EVENTOS_M7, df_evidencia=leer_evidencia_preevento(),
+                coincidencias=pd.DataFrame(), ultimo_sismo=ult_local,
+                ahora=pd.Timestamp(ahora_chile()), logo_path=LOGO_PATH,
+            )
+            st.download_button(
+                "⬇️ Informe comparativo 14D (PDF)",
+                pdf_comp_chile,
+                f"comparativa_chile_{config['id']}.pdf",
+                "application/pdf",
+                use_container_width=True,
+            )
+            with st.expander("👁️ Ver PDF comparativo en la página", expanded=False):
+                st.markdown(informes_pdf.html_vista_previa_pdf(pdf_comp_chile), unsafe_allow_html=True)
+        else:
+            st.caption("Sube `nazca_informes_pdf.py` para activar comparativa PDF.")
 
 with tab_hist:
     st.markdown("### Referencia histórica CHILE — Match vs terremotos M7+ (14D pre-sismo)")
@@ -1956,16 +1993,58 @@ with tab_evidencia:
         else:
             st.caption("No hay coincidencias bajo los criterios actuales.")
 
-        informe_validacion = generar_informe_validacion_texto(coincidencias)
-        st.download_button(
-            "Descargar informe de validación TXT",
-            informe_validacion.encode("utf-8"),
-            "informe_validacion_post_evento_nazca.txt",
-            "text/plain",
-            use_container_width=True,
-        )
-        with st.expander("Ver informe de validación"):
-            st.text(informe_validacion)
+        st.markdown("#### 📄 Informes comparativos 14D (PDF)")
+        if informes_pdf:
+            st.dataframe(
+                informes_pdf.tabla_comparativa_chile(
+                    b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, EVENTOS_M7, mejor_ev,
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            ult_ev = eventos_validacion.iloc[0].to_dict() if not eventos_validacion.empty else None
+            pdf_chile = informes_pdf.generar_pdf_comparativa_chile(
+                estacion=estacion_sel, config=config, puntaje=puntaje, estado=estado,
+                nivel_alerta=nivel_alerta, b_val=b_val, insar=insar, cond=cond, shoa=shoa,
+                total_sismos=total_sismos, total_sismos_chile=total_sismos_chile,
+                mejor_ev=mejor_ev, mejor_match=mejor_match, consultado_usgs=consultado_usgs,
+                eventos_m7=EVENTOS_M7, df_evidencia=df_evidencia, coincidencias=coincidencias,
+                ultimo_sismo=ult_ev, ahora=pd.Timestamp(ahora_chile()), logo_path=LOGO_PATH,
+            )
+            col_val_txt, col_val_pdf = st.columns(2)
+            with col_val_pdf:
+                st.download_button(
+                    "⬇️ Informe comparativo 14D Chile (PDF)",
+                    pdf_chile,
+                    f"comparativa_chile_{estacion_sel[:24].replace(' ', '_')}.pdf",
+                    "application/pdf",
+                    use_container_width=True,
+                )
+            with col_val_txt:
+                informe_validacion = generar_informe_validacion_texto(coincidencias)
+                st.download_button(
+                    "Descargar validación TXT",
+                    informe_validacion.encode("utf-8"),
+                    "informe_validacion_post_evento_nazca.txt",
+                    "text/plain",
+                    use_container_width=True,
+                )
+            with st.expander("👁️ Ver PDF en la página", expanded=True):
+                st.markdown(informes_pdf.html_vista_previa_pdf(pdf_chile), unsafe_allow_html=True)
+            with st.expander("Ver informe de validación TXT"):
+                st.text(informe_validacion)
+        else:
+            informe_validacion = generar_informe_validacion_texto(coincidencias)
+            st.warning("Sube `nazca_informes_pdf.py` para ver informes PDF en pantalla.")
+            st.download_button(
+                "Descargar informe de validación TXT",
+                informe_validacion.encode("utf-8"),
+                "informe_validacion_post_evento_nazca.txt",
+                "text/plain",
+                use_container_width=True,
+            )
+            with st.expander("Ver informe de validación"):
+                st.text(informe_validacion)
 
 if tab_mundo is not None:
     with tab_mundo:
