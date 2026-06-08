@@ -1532,13 +1532,24 @@ st.sidebar.caption(
 st.sidebar.markdown("---")
 admin_pin = st.sidebar.text_input("PIN admin", type="password", placeholder="Opcional")
 admin_esperado = obtener_secret("ADMIN_PIN")
-admin_activo = bool(admin_esperado and admin_pin == admin_esperado)
+if admin_esperado and admin_pin == admin_esperado:
+    st.session_state["admin_autenticado"] = True
+admin_activo = bool(
+    admin_esperado
+    and (
+        st.session_state.get("admin_autenticado", False)
+        or admin_pin == admin_esperado
+    )
+)
 if not admin_esperado:
     st.sidebar.warning(
         "ADMIN_PIN no configurado. Agrégalo en `.streamlit/secrets.toml` y reinicia Streamlit."
     )
 elif admin_activo:
     st.sidebar.success("Modo admin activo.")
+    if st.sidebar.button("Cerrar sesión admin", use_container_width=True):
+        st.session_state.pop("admin_autenticado", None)
+        st.rerun()
     _ver_mundo = getattr(mundo_lab, "MUNDO_LAB_VERSION", None) if mundo_lab else None
     st.sidebar.caption(
         f"Build app: **{APP_BUILD}** · MUNDO: **{_ver_mundo or 'NO'}** · "
@@ -1597,7 +1608,15 @@ else:
 canal = "SATELITAL LEO" if modo_sat else "TERRESTRE"
 
 st.sidebar.markdown("---")
-telegram_activo = st.sidebar.toggle("Telegram vigilancia Chile", value=False) if admin_activo else False
+if admin_activo:
+    if "telegram_vigilancia_activa" not in st.session_state:
+        st.session_state["telegram_vigilancia_activa"] = False
+    telegram_activo = st.sidebar.toggle(
+        "Telegram vigilancia Chile",
+        key="telegram_vigilancia_activa",
+    )
+else:
+    telegram_activo = False
 if telegram_activo:
     if telegram_configurado():
         st.sidebar.success("Telegram configurado.")
