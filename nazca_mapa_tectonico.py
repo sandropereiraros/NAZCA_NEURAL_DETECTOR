@@ -103,8 +103,8 @@ def pydeck_chart_compat(deck, altura=430):
     st.pydeck_chart(deck, height=altura, use_container_width=True)
 
 
-def st_map_minimo(puntos, zoom=None, max_puntos=80):
-    """Solo lat/lon — evita removeChild en Streamlit Cloud con size/color."""
+def st_map_minimo(puntos, zoom=None, max_puntos=80, usar_color=False):
+    """Mapa nativo Streamlit; con usar_color=True pinta círculos de tensión."""
     if not puntos:
         st.caption("Sin datos para mapa.")
         return
@@ -114,13 +114,342 @@ def st_map_minimo(puntos, zoom=None, max_puntos=80):
         return
     if len(df) > max_puntos:
         df = df.head(max_puntos)
+    tiene_color = usar_color and "color" in df.columns
+    tiene_size = usar_color and "size" in df.columns
     try:
+        kwargs = {"latitude": "lat", "longitude": "lon"}
         if zoom is not None:
-            st.map(df, latitude="lat", longitude="lon", zoom=zoom)
-        else:
-            st.map(df, latitude="lat", longitude="lon")
+            kwargs["zoom"] = zoom
+        if tiene_color:
+            kwargs["color"] = "color"
+        if tiene_size:
+            kwargs["size"] = "size"
+        st.map(df, **kwargs)
     except TypeError:
-        st.map(df, latitude="lat", longitude="lon")
+        st.map(df, latitude="lat", longitude="lon", zoom=zoom) if zoom else st.map(df, latitude="lat", longitude="lon")
+
+
+def color_tension_rgb(pct):
+    """Verde → amarillo → naranjo → rojo según tensión acumulada (0–100)."""
+    p = max(0.0, min(float(pct or 0), 100.0))
+    if p >= 85:
+        return [239, 68, 68, 200]
+    if p >= 70:
+        return [249, 115, 22, 195]
+    if p >= 50:
+        return [250, 204, 21, 190]
+    if p >= 30:
+        return [163, 230, 53, 175]
+    return [34, 197, 94, 160]
+
+
+def color_tension_hex(pct):
+    r, g, b, _ = color_tension_rgb(pct)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _calcular_b_value_celda(mags):
+    import numpy as np
+
+    if len(mags) < 8:
+        return None
+    arr = np.asarray(mags, dtype=float)
+    mc = arr.min()
+    filtrado = arr[arr >= mc]
+    if len(filtrado) == 0:
+        return None
+    b = (1.0 / (np.mean(filtrado) - mc)) * 0.4343
+    return round(max(0.4, min(float(b), 2.0)), 2)
+
+
+def _indice_tension_celda(n_sismos, mags, b_local=None):
+    """Índice 0–100: densidad de sismos + energía acumulada + b-value bajo."""
+    if n_sismos <= 0:
+        return 0.0
+    dens = min(n_sismos / 12.0, 1.0) * 100.0
+    energia = sum(10 ** (1.5 * float(m)) for m in mags)
+    ener = min(energia / 400.0, 1.0) * 100.0
+    if b_local is None:
+        b_part = min(n_sismos / 20.0, 1.0) * 55.0
+    elif b_local <= 0.65:
+        b_part = 100.0
+    elif b_local <= 0.75:
+        b_part = 75.0
+    elif b_local <= 0.90:
+        b_part = 45.0
+    else:
+        b_part = 20.0
+    return round(min(0.45 * dens + 0.35 * b_part + 0.20 * ener, 100.0), 1)
+
+
+def _detectar_anomalias_nodo(fila):
+    flags = []
+    if float(fila.get("b-value 14D", 1.0)) < 0.75:
+        flags.append("b-value bajo")
+    if float(fila.get("EM Z-score", 0)) > 1.2:
+        flags.append("EM elevado")
+    if float(fila.get("Riesgo %", 0)) >= 75:
+        flags.append("riesgo alto")
+    if float(fila.get("Match patrón %", 0)) >= 75:
+        flags.append("patrón M7+")
+    if int(fila.get("Sismos 14D Chile", 0)) >= 20:
+        flags.append("enjambre 14D")
+    return flags
+
+
+def preparar_nodos_tension(df_calibracion, estaciones_config):
+    """Nodos CORE NETWORK con tensión del modelo (no epicentros históricos)."""
+    if df_calibracion is None or df_calibracion.empty:
+        return pd.DataFrame()
+    filas = []
+    for _, row in df_calibracion.iterrows():
+        est = row.get("Estación", "")
+        cfg = estaciones_config.get(est)
+        if not cfg:
+            continue
+        anom = _detectar_anomalias_nodo(row)
+        filas.append({
+            "lat": cfg["lat"],
+            "lon": cfg["lon"],
+            "zona": est.split("(")[0].strip(),
+            "tension_pct": float(row.get("Riesgo %", 0)),
+            "b_value": float(row.get("b-value 14D", 1.0)),
+            "sismos_14d": int(row.get("Sismos 14D Chile", 0)),
+            "match_m7": float(row.get("Match patrón %", 0)),
+            "estado": row.get("Estado", ""),
+            "anomalias": ", ".join(anom) if anom else "Parámetros normales",
+            "tipo": "nodo",
+        })
+    return pd.DataFrame(filas)
+
+
+def construir_malla_tension(
+    df_sismos,
+    lat_min=-56.0,
+    lat_max=-17.0,
+    lon_min=-76.5,
+    lon_max=-66.0,
+    paso=1.0,
+    max_celdas=40,
+):
+    """Cuadrícula Chile: acumulación de tensión por celda (ventana 14D USGS)."""
+    sismos = _preparar_sismos(df_sismos)
+    if sismos.empty:
+        return pd.DataFrame()
+    celdas = {}
+    for _, row in sismos.iterrows():
+        lat, lon, mag = float(row["lat"]), float(row["lon"]), float(row["mag"])
+        if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
+            continue
+        clat = round((lat - lat_min) / paso) * paso + lat_min
+        clon = round((lon - lon_min) / paso) * paso + lon_min
+        key = (round(clat, 2), round(clon, 2))
+        celdas.setdefault(key, []).append(mag)
+
+    filas = []
+    for (clat, clon), mags in celdas.items():
+        n = len(mags)
+        b_local = _calcular_b_value_celda(mags)
+        tension = _indice_tension_celda(n, mags, b_local)
+        anom = []
+        if b_local is not None and b_local < 0.75:
+            anom.append("b-value bajo")
+        if n >= 15:
+            anom.append("alta densidad")
+        if max(mags) >= 5.5:
+            anom.append("M>=5.5")
+        filas.append({
+            "lat": clat,
+            "lon": clon,
+            "zona": f"Celda {clat:.1f}°, {clon:.1f}°",
+            "tension_pct": tension,
+            "b_value": b_local if b_local is not None else "—",
+            "sismos_14d": n,
+            "mag_max": round(max(mags), 1),
+            "mag_prom": round(sum(mags) / n, 1),
+            "anomalias": ", ".join(anom) if anom else "Normal",
+            "tipo": "celda",
+        })
+    if not filas:
+        return pd.DataFrame()
+    df = pd.DataFrame(filas).sort_values("tension_pct", ascending=False).head(max_celdas)
+    return df.reset_index(drop=True)
+
+
+def _capas_mapa_tension(df_malla, df_nodos, estacion_lat, estacion_lon, estacion_label):
+    """Prepara filas para st.map (color/size) o capas pydeck."""
+    puntos = []
+    if df_malla is not None and not df_malla.empty:
+        for _, r in df_malla.iterrows():
+            pct = float(r["tension_pct"])
+            puntos.append({
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "color": color_tension_hex(pct),
+                "color_rgb": color_tension_rgb(pct),
+                "size": 1200 + pct * 35,
+                "radio": 18000 + pct * 900,
+                "tension_pct": pct,
+                "zona": r["zona"],
+                "anomalias": r["anomalias"],
+                "tipo": "celda",
+                "tooltip": (
+                    f"Tensión {pct:.0f}% · {r['sismos_14d']} sismos · "
+                    f"Mmax {r['mag_max']} · {r['anomalias']}"
+                ),
+            })
+    if df_nodos is not None and not df_nodos.empty:
+        for _, r in df_nodos.iterrows():
+            pct = float(r["tension_pct"])
+            puntos.append({
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "color": color_tension_hex(pct),
+                "color_rgb": color_tension_rgb(pct),
+                "size": 2200 + pct * 18,
+                "radio": 42000 + pct * 500,
+                "tension_pct": pct,
+                "zona": r["zona"],
+                "anomalias": r["anomalias"],
+                "tipo": "nodo",
+                "tooltip": (
+                    f"Nodo {r['zona']} · Tensión {pct:.0f}% · b={r['b_value']} · {r['anomalias']}"
+                ),
+            })
+    if estacion_lat is not None and estacion_lon is not None:
+        puntos.append({
+            "lat": estacion_lat,
+            "lon": estacion_lon,
+            "color": "#3b82f6",
+            "color_rgb": [59, 130, 246, 255],
+            "size": 2800,
+            "radio": 32000,
+            "tension_pct": 0,
+            "zona": estacion_label,
+            "anomalias": "Estación activa",
+            "tipo": "activa",
+            "tooltip": f"Estación activa: {estacion_label}",
+        })
+    return puntos
+
+
+def tabla_resumen_tension(df_malla, df_nodos):
+    partes = []
+    if df_nodos is not None and not df_nodos.empty:
+        n = df_nodos.copy()
+        n["Origen"] = "Nodo CORE"
+        partes.append(n)
+    if df_malla is not None and not df_malla.empty:
+        c = df_malla.copy()
+        c["Origen"] = "Celda regional"
+        partes.append(c)
+    if not partes:
+        return pd.DataFrame()
+    df = pd.concat(partes, ignore_index=True)
+    cols = ["Origen", "zona", "tension_pct", "sismos_14d", "b_value", "anomalias"]
+    extra = [c for c in ("mag_max", "mag_prom", "match_m7", "estado") if c in df.columns]
+    return df[cols + extra].sort_values("tension_pct", ascending=False)
+
+
+def render_mapa_tension(
+    df_sismos=None,
+    df_calibracion=None,
+    estaciones_config=None,
+    estacion_lat=None,
+    estacion_lon=None,
+    estacion_label="Estación",
+    lat_center=None,
+    lon_center=None,
+    zoom=4,
+    altura=400,
+    mostrar_anillo=True,
+    segmentos_tectonicos=None,
+    mapa_nativo=False,
+    paso_malla=1.0,
+):
+    """Mapa de tensión acumulada (círculos). Los sismos van en tablas, no como puntos del mapa."""
+    mapa_nativo = _forzar_mapa_nativo_por_defecto(mapa_nativo)
+    estaciones_config = estaciones_config or {}
+    df_nodos = preparar_nodos_tension(df_calibracion, estaciones_config)
+    df_malla = construir_malla_tension(df_sismos, paso=paso_malla)
+    puntos = _capas_mapa_tension(df_malla, df_nodos, estacion_lat, estacion_lon, estacion_label)
+
+    if lat_center is None or lon_center is None:
+        if estacion_lat is not None and estacion_lon is not None:
+            lat_center, lon_center = estacion_lat, estacion_lon
+        elif puntos:
+            lat_center = sum(p["lat"] for p in puntos) / len(puntos)
+            lon_center = sum(p["lon"] for p in puntos) / len(puntos)
+        else:
+            lat_center, lon_center = -35.0, -71.0
+
+    if not puntos:
+        st.caption("Sin datos de tensión para el mapa.")
+        return tabla_resumen_tension(df_malla, df_nodos), False
+
+    if mapa_nativo:
+        st_map_minimo(puntos, zoom=zoom, max_puntos=60, usar_color=True)
+        st.caption("Mapa de tensión — círculos por acumulación sísmica (14D). Sismos en tabla lateral.")
+        return tabla_resumen_tension(df_malla, df_nodos), False
+
+    try:
+        import pydeck as pdk
+    except ImportError:
+        st_map_minimo(puntos, zoom=zoom, max_puntos=60, usar_color=True)
+        return tabla_resumen_tension(df_malla, df_nodos), False
+
+    capas = []
+    if mostrar_anillo:
+        paths = _paths_tectonicos(segmentos_tectonicos)
+        capas.append(pdk.Layer(
+            "PathLayer",
+            data=paths,
+            get_path="path",
+            get_color="color",
+            get_width="ancho",
+            width_min_pixels=2,
+            pickable=False,
+        ))
+
+    df_plot = pd.DataFrame(puntos)
+    capas.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=df_plot,
+        get_position=["lon", "lat"],
+        get_radius="radio",
+        get_fill_color="color_rgb",
+        pickable=True,
+        opacity=0.72,
+        stroked=True,
+        get_line_color=[255, 255, 255, 90],
+        line_width_min_pixels=1,
+    ))
+
+    deck = pdk.Deck(
+        layers=capas,
+        initial_view_state=pdk.ViewState(
+            latitude=lat_center,
+            longitude=lon_center,
+            zoom=zoom,
+            pitch=0,
+        ),
+        map_style=None,
+        tooltip={
+            "html": "<b>{zona}</b><br/>{tooltip}",
+            "style": {"backgroundColor": "#161b22", "color": "#e6edf3"},
+        },
+    )
+    pydeck_chart_compat(deck, altura=altura)
+    return tabla_resumen_tension(df_malla, df_nodos), True
+
+
+def leyenda_mapa_tension():
+    return (
+        "Mapa de tensión acumulada (14D) · "
+        "🟢 baja · 🟡 media · 🟠 alta · 🔴 crítica · "
+        "Círculos grandes = nodos CORE · pequeños = celdas · "
+        "🔵 estación activa · Sismos USGS en tabla"
+    )
 
 
 def color_por_magnitud(mag):
@@ -374,9 +703,4 @@ def _fallback_st_map(sismos, estacion_lat, estacion_lon, estacion_color_rgb, zoo
 
 
 def leyenda_mapa_tectonico():
-    return (
-        "🟠 Cinturón de Fuego del Pacífico · "
-        "🔴 M6.0+ · 🟡 M4.5–5.9 · 🟢 M<4.5 · "
-        "Tooltip USGS: magnitud + lugar + fecha · "
-        "🔵 Nodo/estación activa"
-    )
+    return leyenda_mapa_tension()

@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import sys
 import random
 import base64
 import unicodedata
@@ -15,9 +16,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from fpdf import FPDF
 
-import nazca_alertas as alertas
-
-APP_BUILD = "2026-06-08-v6"
+APP_BUILD = "2026-06-08-v7"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -26,22 +25,34 @@ def _cargar_modulo_local(nombre, archivo):
     if not os.path.exists(ruta):
         return None, f"Falta archivo: {archivo}"
     try:
+        sys.modules.pop(nombre, None)
         spec = importlib.util.spec_from_file_location(nombre, ruta)
         mod = importlib.util.module_from_spec(spec)
+        sys.modules[nombre] = mod
         spec.loader.exec_module(mod)
         return mod, None
     except Exception as exc:
+        sys.modules.pop(nombre, None)
         return None, f"Error cargando {archivo}: {exc}"
 
 
 informes_pdf, _err_informes = _cargar_modulo_local("nazca_informes_pdf", "nazca_informes_pdf.py")
 mapa_tect, _err_mapa = _cargar_modulo_local("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
 mundo_lab, _err_mundo = _cargar_modulo_local("nazca_mundo_lab", "nazca_mundo_lab.py")
+gnss_mod, _err_gnss = _cargar_modulo_local("nazca_gnss", "nazca_gnss.py")
+atmos_mod, _err_atmos = _cargar_modulo_local("nazca_atmosfera", "nazca_atmosfera.py")
+cond_mod, _err_cond = _cargar_modulo_local("nazca_conductividad", "nazca_conductividad.py")
+shoa_mod, _err_shoa = _cargar_modulo_local("nazca_shoa", "nazca_shoa.py")
+alertas, _err_alertas = _cargar_modulo_local("nazca_alertas", "nazca_alertas.py")
 
 # ==============================================================================
 # CONFIGURACIÓN
 # ==============================================================================
 st.set_page_config(page_title=f"NAZCA CORE MONITOR v8.0 · {APP_BUILD}", layout="wide")
+
+if alertas is None:
+    st.error(f"No se pudo cargar nazca_alertas.py: {_err_alertas}")
+    st.stop()
 
 PESOS = {"SISMO_BVAL": 0.62, "INSAR": 0.18, "CONDUCT": 0.10, "SHOA": 0.06, "ATMOS": 0.01}
 UMBRAL_CRITICO = alertas.UMBRAL_CRITICO
@@ -1178,7 +1189,55 @@ def telemetria_estable(estacion, config, total_sismos, ttl_seg, modo_sat, nodo_o
         insar = round(42.0 + min(total_sismos * 4.0, 48.0) + rng.uniform(-1.5, 1.5), 1)
         origen = "SATELITAL LEO" if modo_sat else "SENSOR FÍSICO"
 
-    return shoa, cond, pres, termico, insar, origen
+    gnss_info = None
+    atmos_info = None
+    cond_info = None
+    shoa_info = None
+    if not nodo_offline and not modo_sat:
+        if shoa_mod:
+            try:
+                shoa_info = shoa_mod.lectura_marea_nodo(
+                    estacion, config["lat"], config["lon"], ttl_seg=min(ttl_seg, 1800)
+                )
+                if shoa_info:
+                    shoa = shoa_info["shoa_cm"]
+                    origen = shoa_info["origen"]
+            except Exception:
+                shoa_info = None
+        if gnss_mod:
+            try:
+                gnss_info = gnss_mod.lectura_gnss_nodo(
+                    estacion, config["lat"], config["lon"], ttl_seg=ttl_seg
+                )
+                if gnss_info:
+                    insar = gnss_info["insar_pct"]
+                    origen = gnss_info["origen"]
+            except Exception:
+                gnss_info = None
+        if atmos_mod:
+            try:
+                atmos_info = atmos_mod.lectura_atmosfera(
+                    config["lat"],
+                    config["lon"],
+                    baseline_pres=config["baseline_pres"],
+                    codigo_omm=config.get("id"),
+                    ttl_seg=min(ttl_seg, 3600),
+                )
+                if atmos_info:
+                    pres = atmos_info["presion_hpa"]
+                    termico = atmos_info["termico"]
+                    origen = atmos_info["origen"]
+            except Exception:
+                atmos_info = None
+        if cond_mod:
+            try:
+                cond_info = cond_mod.estimar_conductividad(estacion, config, atmos_info)
+                if cond_info and cond_info.get("cond_proxy_fisico"):
+                    cond = cond_info["conductividad_ms_m"]
+            except Exception:
+                cond_info = None
+
+    return shoa, cond, pres, termico, insar, origen, gnss_info, atmos_info, cond_info, shoa_info
 
 # ==============================================================================
 # MOTOR DE RIESGO (fusión: matriz v7 + compuerta/Z-score/Kp del v3)
@@ -1233,17 +1292,53 @@ def calcular_riesgo_fusion(insar, total_sismos, b_val, cond, shoa, config, kp, t
     return "ESTABLE", "🟢", score, filtro
 
 
-def aplicar_control_calidad(estado, icono, puntaje, log_filtro, modo_demo=False):
+def _tope_riesgo_permitido(gnss_info=None, atmos_info=None, cond_info=None, shoa_info=None):
+    fn = getattr(alertas, "tope_riesgo_permitido", None)
+    if callable(fn):
+        return fn(gnss_info, atmos_info, cond_info, shoa_info)
+    gnss_ok = getattr(alertas, "gnss_es_confiable", lambda _: False)(gnss_info)
+    atmos_ok = getattr(alertas, "atmos_es_real", lambda _: False)(atmos_info)
+    cond_ok = getattr(alertas, "cond_es_proxy_fisico", lambda _: False)(cond_info)
+    if gnss_ok and atmos_ok and cond_ok:
+        return getattr(alertas, "MAX_RIESGO_CON_GNSS_Y_ATMOS", 96.0)
+    if gnss_ok:
+        return getattr(alertas, "MAX_RIESGO_CON_GNSS_CONFIABLE", 92.0)
+    if atmos_ok and cond_ok:
+        return getattr(alertas, "MAX_RIESGO_CON_ATMOS_REAL", 85.0)
+    return getattr(alertas, "MAX_RIESGO_CON_TELEMETRIA_ESTIMADA", 74.0)
+
+
+def aplicar_control_calidad(
+    estado, icono, puntaje, log_filtro, modo_demo=False,
+    gnss_info=None, atmos_info=None, cond_info=None, shoa_info=None,
+):
     if modo_demo:
         return estado, icono, puntaje, f"{log_filtro} // MODO DEMO."
-    if puntaje > MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:
-        return (
-            "VIGILANCIA ALTA HEURÍSTICA",
-            "🟠",
-            MAX_RIESGO_CON_TELEMETRIA_ESTIMADA,
-            f"{log_filtro} // Riesgo limitado: InSAR/EM/SHOA/presión/térmico son estimados, no mediciones reales.",
-        )
-    return estado, icono, puntaje, f"{log_filtro} // Calidad: USGS/NOAA real + telemetría física estimada."
+    tope = _tope_riesgo_permitido(gnss_info, atmos_info, cond_info, shoa_info)
+    if puntaje > tope:
+        if tope >= alertas.MAX_RIESGO_CON_TELEMETRIA_REAL:
+            msg = f"Tope telemetría real ({tope:.0f}%): modelo casi completo."
+        elif tope >= alertas.MAX_RIESGO_CON_GNSS_Y_ATMOS:
+            msg = f"Tope multi-sensor ({tope:.0f}%): SHOA sin mareógrafo cercano."
+        elif alertas.gnss_es_confiable(gnss_info):
+            msg = f"Tope GNSS confiable ({tope:.0f}%): capas parciales estimadas."
+        elif alertas.atmos_es_real(atmos_info):
+            msg = f"Tope atmósfera real ({tope:.0f}%): GNSS/SHOA parciales."
+        else:
+            msg = "Riesgo limitado: telemetría parcialmente estimada."
+        if tope <= alertas.MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:
+            return "VIGILANCIA ALTA HEURÍSTICA", "🟠", tope, f"{log_filtro} // {msg}"
+        return estado, icono, tope, f"{log_filtro} // {msg}"
+    capas = ["USGS/NOAA"]
+    if alertas.gnss_es_confiable(gnss_info):
+        capas.append(f"GNSS {gnss_info['estacion_gnss']}")
+    if alertas.atmos_es_real(atmos_info):
+        capas.append(atmos_info.get("origen", "Atmos"))
+    if alertas.cond_es_proxy_fisico(cond_info):
+        capas.append(f"EM-{cond_info.get('zona_suelo', 'proxy')}")
+    if alertas.shoa_es_real(shoa_info):
+        capas.append(f"SHOA-{shoa_info.get('codigo_ioc', 'IOC')}")
+    return estado, icono, puntaje, f"{log_filtro} // Calidad: {', '.join(capas)}."
 
 
 def similitud(a, r, escala):
@@ -1283,13 +1378,16 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
         b_val = calcular_b_value(df_local)
         bloque, _ = bucket_telemetria(estacion, ttl_seg)
         nodo_offline = modo_sat and random.Random(hash((estacion, bloque, "offline"))).choice([True, False])
-        shoa, cond, presion, termico, insar, origen = telemetria_estable(
+        shoa, cond, presion, termico, insar, origen, gnss_info, atmos_info, cond_info, shoa_info = telemetria_estable(
             estacion, cfg, total_sismos, ttl_seg, modo_sat, nodo_offline
         )
         estado, _, puntaje, _ = calcular_riesgo_fusion(
             insar, total_sismos, b_val, cond, shoa, cfg, kp, termico, presion
         )
-        estado, _, puntaje, _ = aplicar_control_calidad(estado, "🟠", puntaje, "", modo_demo=False)
+        estado, _, puntaje, _ = aplicar_control_calidad(
+            estado, "🟠", puntaje, "", modo_demo=False,
+            gnss_info=gnss_info, atmos_info=atmos_info, cond_info=cond_info, shoa_info=shoa_info,
+        )
         _, patron, match_patron = comparar_con_historico(insar, total_sismos, b_val, cond, shoa)
         z_cond = round((cond - cfg["baseline_cond"]) / cfg["sigma_cond"], 2)
         filas.append({
@@ -1309,6 +1407,14 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
             "Térmico": termico,
             "Kp NOAA": kp,
             "Origen telemetría": origen,
+            "GNSS estación": gnss_info["estacion_gnss"] if gnss_info else "—",
+            "GNSS H mm/yr": gnss_info["horiz_mm_anio"] if gnss_info else None,
+            "GNSS V mm/yr": gnss_info["vu_mm_anio"] if gnss_info else None,
+            "Presión hPa": atmos_info["presion_hpa"] if atmos_info else presion,
+            "Atmósfera": atmos_info["origen"] if atmos_info else "estimado",
+            "EM proxy zona": cond_info.get("zona_suelo") if cond_info else "—",
+            "SHOA IOC": shoa_info.get("codigo_ioc") if shoa_info else "—",
+            "SHOA real": "Sí" if alertas.shoa_es_real(shoa_info) else "No",
             "Nodo offline": "Sí" if nodo_offline else "No",
             "USGS actualizado": consultado_usgs,
             "NOAA actualizado": consultado_noaa,
@@ -1337,7 +1443,8 @@ auditable y apta para revisión por profesionales de geotecnia, geología, sismo
 - USGS: catálogo sísmico con ventana móvil de 14 días para Chile. Dato real consultado por API.
 - NOAA Kp: índice geomagnético. Dato real consultado por API y servido por caché operativa.
 - b-value: indicador calculado desde magnitudes USGS locales por estación.
-- InSAR, EM, SHOA, presión y térmico: telemetría estimada/simulada mientras no existan sensores o APIs reales conectadas.
+- GNSS (NGL MIDAS), atmósfera (Open-Meteo), EM proxy y mareógrafo IOC UNESCO: datos reales cuando la API responde.
+- InSAR deriva de GNSS; EM es proxy físico por zona geológica; SHOA es anomalía mareográfica IOC (no SHOA directo).
 
 Última actualización USGS: {consultado_usgs}
 Última actualización NOAA: {consultado_noaa}
@@ -1711,6 +1818,10 @@ if modo_demo:
     consultado_usgs = esc["consultado_usgs"]
     consultado_noaa = esc["consultado_noaa"]
     origen_em = f"DEMO · firma {esc['evento_ref']}"
+    gnss_info = None
+    atmos_info = None
+    cond_info = None
+    shoa_info = None
     nodo_offline = False
     bloque = "demo"
 else:
@@ -1726,7 +1837,7 @@ else:
 
     bloque, _ = bucket_telemetria(estacion_sel, ttl_seg)
     nodo_offline = modo_sat and random.Random(hash((estacion_sel, bloque, "offline"))).choice([True, False])
-    shoa, cond, presion, termico, insar, origen_em = telemetria_estable(
+    shoa, cond, presion, termico, insar, origen_em, gnss_info, atmos_info, cond_info, shoa_info = telemetria_estable(
         estacion_sel, config, total_sismos, ttl_seg, modo_sat, nodo_offline
     )
 
@@ -1734,7 +1845,8 @@ estado, icono, puntaje, log_filtro = calcular_riesgo_fusion(
     insar, total_sismos, b_val, cond, shoa, config, kp, termico, presion
 )
 estado, icono, puntaje, log_filtro = aplicar_control_calidad(
-    estado, icono, puntaje, log_filtro, modo_demo=modo_demo
+    estado, icono, puntaje, log_filtro, modo_demo=modo_demo,
+    gnss_info=gnss_info, atmos_info=atmos_info, cond_info=cond_info, shoa_info=shoa_info,
 )
 
 clave_log = f"{estacion_sel}_{round(puntaje, 1)}_{bloque if not modo_demo else 'demo'}"
@@ -1911,9 +2023,42 @@ with tab_vivo:
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", f"{icono}")
     c2.metric("Match", f"{puntaje:.1f}%")
-    c3.metric("InSAR", f"{insar:.1f}%")
+    c3.metric("Deformación", f"{insar:.1f}%", help="Índice NAZCA; con GNSS usa velocidad real mm/año (NGL MIDAS SA).")
     c4.metric("b-value", f"{b_val}")
     c5.metric("Kp NOAA", kp)
+    if atmos_info:
+        st.caption(
+            f"Atmósfera **{atmos_info['origen']}**: "
+            f"P={atmos_info['presion_hpa']:.1f} hPa · T={atmos_info['temp_c']:.1f} °C · "
+            f"HR={atmos_info['humedad_pct']:.0f}% · lluvia={atmos_info['precip_mm']:.1f} mm"
+        )
+    if cond_info and cond_info.get("cond_proxy_fisico"):
+        st.caption(
+            f"EM proxy **{cond_info['zona_suelo']}**: {cond_info['conductividad_ms_m']:.2f} mS/m "
+            f"(saturación agua est. {cond_info.get('saturacion_agua_est', 0):.2f})"
+        )
+    if shoa_info and shoa_info.get("shoa_real"):
+        conf_m = "confiable" if alertas.shoa_es_real(shoa_info) else "lejana"
+        st.caption(
+            f"SHOA **{shoa_info['codigo_ioc'].upper()}** ({conf_m}, {shoa_info.get('dist_km', '?')} km): "
+            f"anom={shoa_info['anomalia_cm']:.1f} cm · tasa={shoa_info['tasa_cm_h']:.1f} cm/h · "
+            f"{shoa_info.get('ultima_lectura', '')}"
+        )
+    if gnss_info:
+        conf_txt = "confiable" if gnss_info.get("gnss_confiable") else "lejana"
+        acel_txt = ""
+        acel = gnss_info.get("aceleracion") or {}
+        if acel.get("acelerando"):
+            acel_txt = (
+                f" · **aceleración 1A** H={acel.get('horiz_reciente_mm_anio', 0):.1f} mm/yr "
+                f"(×{acel.get('ratio_horizontal', 1):.2f})"
+            )
+        st.caption(
+            f"GNSS **{gnss_info['estacion_gnss']}** ({gnss_info.get('match', 'cercana')}, "
+            f"{gnss_info.get('dist_km', '?')} km, {conf_txt}): "
+            f"H={gnss_info['horiz_mm_anio']:.1f} mm/yr · V={gnss_info['vu_mm_anio']:.1f} mm/yr"
+            f"{acel_txt} · {gnss_info['marco']}"
+        )
 
     c6, c7, c8 = st.columns(3)
     c6.metric("Patrón M7+", f"{mejor_match:.1f}%")
@@ -1925,23 +2070,65 @@ with tab_vivo:
     c10.metric("SHOA", f"{shoa} cm")
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
+    df_tension_tabla = pd.DataFrame()
     with col_mapa:
-        st.markdown("#### Mapa sísmico regional + Cinturón de Fuego")
-        _render_mapa_anillo_fuego(
-            df_sismos_local, config["lat"], config["lon"], estacion_sel,
-            zoom=4, altura=400, modo_demo=modo_demo,
-            mapa_principal=True,
+        st.markdown("#### Mapa de tensión acumulada · Cinturón de Fuego")
+        st.caption(
+            "El mapa muestra **dónde se acumula tensión** (14D USGS + modelo NAZCA). "
+            "Los temblores pasados quedan en la tabla lateral."
         )
+        if mapa_tect:
+            df_tension_tabla, _ = mapa_tect.render_mapa_tension(
+                df_sismos=df_sismos,
+                df_calibracion=df_calibracion,
+                estaciones_config=ESTACIONES_CONFIG,
+                estacion_lat=config["lat"],
+                estacion_lon=config["lon"],
+                estacion_label=estacion_sel,
+                zoom=4,
+                altura=400,
+                mapa_nativo=_usar_mapa_nativo(modo_demo),
+            )
+            st.caption(mapa_tect.leyenda_mapa_tension())
+            if not df_tension_tabla.empty:
+                n_alta = int((df_tension_tabla["tension_pct"] >= 70).sum())
+                n_anom = int(
+                    (~df_tension_tabla["anomalias"].astype(str).str.contains(
+                        "Normal|normales", case=False, na=False
+                    )).sum()
+                )
+                st.caption(f"**Vigilancia:** {n_alta} zona(s) con tension >=70% · {n_anom} con parametros anomalos")
+        else:
+            _render_mapa_anillo_fuego(
+                df_sismos_local, config["lat"], config["lon"], estacion_sel,
+                zoom=4, altura=400, modo_demo=modo_demo,
+                mapa_principal=True,
+            )
 
     with col_tabla:
+        st.markdown("##### Sismos 14D — estación activa")
         st.caption(
             f"Origen EM: {origen_em} | Sismos 14D Chile: {total_sismos_chile} | "
-            f"Cálculo local {RADIO_ESTACION_KM} km: {total_sismos} | USGS: {consultado_usgs}"
+            f"Radio {RADIO_ESTACION_KM} km: {total_sismos} | USGS: {consultado_usgs}"
         )
         st.dataframe(
             _df_ui(df_sismos_local[["Magnitud", "Lugar", "Fecha", "Distancia_km"]] if not df_sismos_local.empty else pd.DataFrame(columns=["Magnitud", "Lugar", "Fecha", "Distancia_km"])),
-            height=200, use_container_width=True,
+            height=180, use_container_width=True,
         )
+        if not df_tension_tabla.empty:
+            st.markdown("##### Tensión por zona / nodo")
+            st.dataframe(
+                _df_ui(df_tension_tabla.rename(columns={
+                    "zona": "Zona",
+                    "tension_pct": "Tensión %",
+                    "sismos_14d": "Sismos 14D",
+                    "b_value": "b-value",
+                    "anomalias": "Parámetros",
+                })),
+                height=180,
+                use_container_width=True,
+                hide_index=True,
+            )
 
     st.markdown("#### 📄 Informes PDF")
     col_pdf1, col_pdf2 = st.columns(2)
@@ -2043,7 +2230,7 @@ with tab_calidad:
         {"Parámetro": "SISMO_BVAL", "Valor": PESOS["SISMO_BVAL"], "Calidad": "REAL/CALCULADO", "Uso": "Peso de b-value y actividad sísmica local"},
         {"Parámetro": "INSAR", "Valor": PESOS["INSAR"], "Calidad": "ESTIMADO", "Uso": "Deformación cortical estimada"},
         {"Parámetro": "CONDUCT", "Valor": PESOS["CONDUCT"], "Calidad": "ESTIMADO", "Uso": "Anomalía electromagnética"},
-        {"Parámetro": "SHOA", "Valor": PESOS["SHOA"], "Calidad": "ESTIMADO", "Uso": "Residuo mareográfico/SHOA simulado"},
+        {"Parámetro": "SHOA", "Valor": PESOS["SHOA"], "Calidad": "REAL (IOC)", "Uso": "Anomalía mareográfica IOC UNESCO por nodo"},
         {"Parámetro": "ATMOS", "Valor": PESOS["ATMOS"], "Calidad": "ESTIMADO", "Uso": "Presión y componente térmico"},
         {"Parámetro": "UMBRAL_CRITICO", "Valor": UMBRAL_CRITICO, "Calidad": "MODELO", "Uso": "Umbral interno de riesgo"},
         {"Parámetro": "RADIO_ESTACION_KM", "Valor": RADIO_ESTACION_KM, "Calidad": "MODELO", "Uso": "Radio local usado para calcular cada estación"},

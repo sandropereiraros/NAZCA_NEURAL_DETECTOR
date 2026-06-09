@@ -13,6 +13,10 @@ import pandas as pd
 import requests
 
 import nazca_alertas as alertas
+import nazca_atmosfera as atmosfera
+import nazca_conductividad as conductividad
+import nazca_gnss as gnss
+import nazca_shoa as shoa_ioc
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / ".nazca_cache"
@@ -152,7 +156,7 @@ def calcular_b_value(df):
     return round(max(0.4, min(b, 2.0)), 2)
 
 
-def telemetria_estable(estacion, config, total_sismos, ttl_seg):
+def telemetria_estable(estacion, config, total_sismos, ttl_seg, secrets=None):
     bloque = int(ahora_chile().timestamp() // ttl_seg)
     rng = random.Random(hash((estacion, bloque, "vigilancia")))
     shoa = round(2.0 + rng.uniform(-1.5, 3.0), 2)
@@ -160,7 +164,45 @@ def telemetria_estable(estacion, config, total_sismos, ttl_seg):
     pres = round(config["baseline_pres"] + rng.uniform(-1.5, 1.5), 2)
     termico = round(rng.uniform(0.2, 2.5), 2)
     insar = round(42.0 + min(total_sismos * 4.0, 48.0) + rng.uniform(-1.5, 1.5), 1)
-    return shoa, cond, pres, termico, insar
+    gnss_info = None
+    atmos_info = None
+    cond_info = None
+    shoa_info = None
+    try:
+        shoa_info = shoa_ioc.lectura_marea_nodo(
+            estacion, config["lat"], config["lon"], ttl_seg=min(ttl_seg, 1800)
+        )
+        if shoa_info:
+            shoa = shoa_info["shoa_cm"]
+    except Exception:
+        shoa_info = None
+    try:
+        gnss_info = gnss.lectura_gnss_nodo(estacion, config["lat"], config["lon"], ttl_seg=ttl_seg)
+        if gnss_info:
+            insar = gnss_info["insar_pct"]
+    except Exception:
+        gnss_info = None
+    try:
+        atmos_info = atmosfera.lectura_atmosfera(
+            config["lat"],
+            config["lon"],
+            baseline_pres=config["baseline_pres"],
+            codigo_omm=config.get("id"),
+            secrets=secrets,
+            ttl_seg=min(ttl_seg, 3600),
+        )
+        if atmos_info:
+            pres = atmos_info["presion_hpa"]
+            termico = atmos_info["termico"]
+    except Exception:
+        atmos_info = None
+    try:
+        cond_info = conductividad.estimar_conductividad(estacion, config, atmos_info)
+        if cond_info:
+            cond = cond_info["conductividad_ms_m"]
+    except Exception:
+        cond_info = None
+    return shoa, cond, pres, termico, insar, gnss_info, atmos_info, cond_info, shoa_info
 
 
 def calcular_riesgo_fusion(insar, total_sismos, b_val, cond, shoa, config, kp, termico, presion):
@@ -220,16 +262,19 @@ def evaluar_estacion(estacion, config, df_sismos, kp, consultado_usgs, ttl_seg):
     df_local = filtrar_sismos_estacion(df_sismos, config["lat"], config["lon"])
     total_sismos = len(df_local)
     b_val = calcular_b_value(df_local)
-    shoa, cond, pres, termico, insar = telemetria_estable(estacion, config, total_sismos, ttl_seg)
+    shoa, cond, pres, termico, insar, gnss_info, atmos_info, cond_info, shoa_info = telemetria_estable(
+        estacion, config, total_sismos, ttl_seg, secrets=alertas.leer_secrets_toml()
+    )
     estado, icono, puntaje, log_filtro = calcular_riesgo_fusion(
         insar, total_sismos, b_val, cond, shoa, config, kp, termico, pres
     )
-    if puntaje > alertas.MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:
-        puntaje = alertas.MAX_RIESGO_CON_TELEMETRIA_ESTIMADA
-        estado = "VIGILANCIA ALTA HEURISTICA"
+    tope = alertas.tope_riesgo_permitido(gnss_info, atmos_info, cond_info, shoa_info)
+    if puntaje > tope:
+        puntaje = tope
+        estado = "VIGILANCIA ALTA HEURISTICA" if not alertas.gnss_es_confiable(gnss_info) else estado
     mejor_ev, mejor_match = comparar_con_historico(insar, total_sismos, b_val, cond, shoa)
     nivel = alertas.clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar)
-    return {
+    resultado = {
         "estacion": estacion,
         "estado": estado,
         "puntaje": puntaje,
@@ -243,7 +288,40 @@ def evaluar_estacion(estacion, config, df_sismos, kp, consultado_usgs, ttl_seg):
         "nivel": nivel,
         "log_filtro": log_filtro,
         "consultado_usgs": consultado_usgs,
+        "gnss": gnss_info,
+        "atmos": atmos_info,
+        "cond_info": cond_info,
+        "shoa_info": shoa_info,
     }
+    if atmos_info:
+        resultado["log_filtro"] = (
+            f"{resultado['log_filtro']} // Atmos {atmos_info['origen']}: "
+            f"P={atmos_info['presion_hpa']:.1f}hPa T={atmos_info['temp_c']:.1f}C HR={atmos_info['humedad_pct']:.0f}%."
+        )
+    if cond_info and cond_info.get("cond_proxy_fisico"):
+        resultado["log_filtro"] = (
+            f"{resultado['log_filtro']} // EM proxy {cond_info['zona_suelo']}: {cond_info['conductividad_ms_m']:.2f} mS/m."
+        )
+    if shoa_info and shoa_info.get("shoa_real"):
+        conf_m = "confiable" if alertas.shoa_es_real(shoa_info) else f"lejana {shoa_info.get('dist_km')}km"
+        resultado["log_filtro"] = (
+            f"{resultado['log_filtro']} // SHOA IOC {shoa_info['codigo_ioc']} ({conf_m}): "
+            f"anom={shoa_info['anomalia_cm']:.1f}cm tasa={shoa_info['tasa_cm_h']:.1f}cm/h."
+        )
+    if gnss_info:
+        extra = ""
+        acel = gnss_info.get("aceleracion") or {}
+        if acel.get("acelerando"):
+            extra = (
+                f" | acel. 1A H={acel.get('horiz_reciente_mm_anio', 0):.1f} "
+                f"ratio={acel.get('ratio_horizontal', 1):.2f}"
+            )
+        conf = "confiable" if gnss_info.get("gnss_confiable") else f"lejana {gnss_info.get('dist_km')}km"
+        resultado["log_filtro"] = (
+            f"{resultado['log_filtro']} // GNSS {gnss_info['estacion_gnss']} ({conf}): "
+            f"H={gnss_info['horiz_mm_anio']:.1f} V={gnss_info['vu_mm_anio']:.1f} mm/yr{extra}."
+        )
+    return resultado
 
 
 def ejecutar_vigilancia(secrets: dict | None = None, ttl_seg: int = TTL_SEG_DEFAULT, dry_run: bool = False):

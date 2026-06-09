@@ -18,6 +18,12 @@ CANAL_SUSCRIPCION_CHILE = "chile"
 UMBRAL_CRITICO = 75.0
 UMBRAL_SIRENA_ROJA = 85.0
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
+MAX_RIESGO_CON_GNSS_CONFIABLE = 92.0
+MAX_RIESGO_CON_ATMOS_REAL = 85.0
+MAX_RIESGO_CON_GNSS_Y_ATMOS = 96.0
+MAX_RIESGO_CON_TELEMETRIA_REAL = 98.0
+GNSS_DIST_MAX_CONFIABLE_KM = 100.0
+SHOA_DIST_MAX_CONFIABLE_KM = 120.0
 
 # --- Telegram: patrón M7+ histórico ---
 UMBRAL_NOTIFICACION_TELEGRAM = 68.0
@@ -70,6 +76,53 @@ def leer_secrets_toml(ruta: Path | None = None) -> dict[str, str]:
 
 def compuerta_abierta(insar: float, total_sismos: int) -> bool:
     return insar >= INSAR_COMPUERTA or total_sismos >= 2
+
+
+def gnss_es_confiable(gnss_info: dict | None) -> bool:
+    if not gnss_info:
+        return False
+    dist = gnss_info.get("dist_km")
+    if dist is None:
+        return False
+    return float(dist) <= GNSS_DIST_MAX_CONFIABLE_KM
+
+
+def atmos_es_real(atmos_info: dict | None) -> bool:
+    return bool(atmos_info and atmos_info.get("atmos_real"))
+
+
+def cond_es_proxy_fisico(cond_info: dict | None) -> bool:
+    return bool(cond_info and cond_info.get("cond_proxy_fisico"))
+
+
+def shoa_es_real(shoa_info: dict | None) -> bool:
+    if not shoa_info or not shoa_info.get("shoa_real"):
+        return False
+    dist = shoa_info.get("dist_km")
+    if dist is None:
+        return True
+    return float(dist) <= SHOA_DIST_MAX_CONFIABLE_KM
+
+
+def tope_riesgo_permitido(
+    gnss_info: dict | None = None,
+    atmos_info: dict | None = None,
+    cond_info: dict | None = None,
+    shoa_info: dict | None = None,
+) -> float:
+    gnss_ok = gnss_es_confiable(gnss_info)
+    atmos_ok = atmos_es_real(atmos_info)
+    cond_ok = cond_es_proxy_fisico(cond_info)
+    shoa_ok = shoa_es_real(shoa_info)
+    if gnss_ok and atmos_ok and cond_ok and shoa_ok:
+        return MAX_RIESGO_CON_TELEMETRIA_REAL
+    if gnss_ok and atmos_ok and cond_ok:
+        return MAX_RIESGO_CON_GNSS_Y_ATMOS
+    if gnss_ok:
+        return MAX_RIESGO_CON_GNSS_CONFIABLE
+    if atmos_ok and cond_ok:
+        return MAX_RIESGO_CON_ATMOS_REAL
+    return MAX_RIESGO_CON_TELEMETRIA_ESTIMADA
 
 
 def es_firma_ruptura(
