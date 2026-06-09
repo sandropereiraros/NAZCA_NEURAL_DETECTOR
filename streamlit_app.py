@@ -16,7 +16,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-08-v8"
+APP_BUILD = "2026-06-08-v11"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -43,6 +43,8 @@ gnss_mod, _err_gnss = _cargar_modulo_local("nazca_gnss", "nazca_gnss.py")
 atmos_mod, _err_atmos = _cargar_modulo_local("nazca_atmosfera", "nazca_atmosfera.py")
 cond_mod, _err_cond = _cargar_modulo_local("nazca_conductividad", "nazca_conductividad.py")
 shoa_mod, _err_shoa = _cargar_modulo_local("nazca_shoa", "nazca_shoa.py")
+auditoria_mod, _err_auditoria = _cargar_modulo_local("nazca_auditoria_semaforo", "nazca_auditoria_semaforo.py")
+forecast_mod, _err_forecast = _cargar_modulo_local("nazca_forecast_sismico", "nazca_forecast_sismico.py")
 alertas, _err_alertas = _cargar_modulo_local("nazca_alertas", "nazca_alertas.py")
 
 # ==============================================================================
@@ -191,6 +193,48 @@ st.markdown(
         letter-spacing: 1px;
     }
     h1, h2, h3 { font-family: 'Courier New', monospace !important; }
+    .nazca-sistema-panel {
+        border: 2px solid;
+        border-radius: 14px;
+        padding: 16px 18px 8px 18px;
+        margin: 0 0 18px 0;
+    }
+    .nazca-sistema-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 14px;
+        margin-bottom: 12px;
+    }
+    .nazca-sistema-badge {
+        display: inline-block;
+        padding: 5px 12px;
+        border: 1px solid;
+        border-radius: 999px;
+        font-family: 'Courier New', monospace;
+        font-size: .78rem;
+        font-weight: 700;
+        letter-spacing: 1.6px;
+    }
+    .nazca-sistema-sub {
+        color: #8b949e;
+        font-size: .88rem;
+    }
+    .nazca-veredicto-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        border: 2px solid;
+        border-radius: 10px;
+        font-family: 'Courier New', monospace;
+        font-size: 1.05rem;
+        font-weight: 700;
+        margin: 4px 0 12px 0;
+    }
+    .nazca-veredicto-icono { font-size: 1.35rem; line-height: 1; }
+    .nazca-panel-semaforo { box-shadow: 0 0 22px rgba(210, 153, 34, .08); }
+    .nazca-panel-gr { box-shadow: 0 0 22px rgba(57, 212, 214, .1); }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1523,6 +1567,29 @@ def render_tab_acerca_de(ttl_seg, ttl_horas, consultado_usgs, consultado_noaa):
     c3.metric("Último USGS", str(consultado_usgs)[:16])
     c4.metric("Último NOAA Kp", str(consultado_noaa)[:16])
 
+    st.markdown("#### Dos sistemas independientes en pantalla")
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        st.markdown(
+            "<div style='border:2px solid #d29922;border-radius:12px;padding:14px;"
+            "background:rgba(210,153,34,.08);'>"
+            "<b style='color:#d29922;'>SISTEMA 1 · SEMÁFORO NAZCA</b><br>"
+            "Vigilancia experimental multi-sensor. Colores 🟢🟡🟠🔴 según umbrales del modelo "
+            "(sismos, patrón M7+, GNSS, marea, atmósfera). "
+            "<b>No usa</b> test Poisson ni Omori-Utsu.</div>",
+            unsafe_allow_html=True,
+        )
+    with col_s2:
+        st.markdown(
+            "<div style='border:2px solid #39d4d6;border-radius:12px;padding:14px;"
+            "background:rgba(57,212,214,.08);'>"
+            "<b style='color:#39d4d6;'>SISTEMA 2 · TENDENCIA GR / OMORI</b><br>"
+            "Leyes empíricas estándar: Mc MAXC, b-value MLE Aki, test Poisson (α=0.05), "
+            "ajuste Omori-Utsu. Flecha ↑ rojo = sube · ↓ verde = baja · → azul = estable. "
+            "<b>Independiente</b> del semáforo.</div>",
+            unsafe_allow_html=True,
+        )
+
     st.markdown("#### Fuentes de datos por variable")
     filas_fuentes = [
         {
@@ -1540,6 +1607,14 @@ def render_tab_acerca_de(ttl_seg, ttl_horas, consultado_usgs, consultado_noaa):
             "Tipo": "CALCULADO",
             "Caché": "Derivado de caché USGS",
             "Uso en modelo": "Firma de ruptura y peso SISMO_BVAL (62%)",
+        },
+        {
+            "Variable": "Tendencia GR / Omori (Sistema 2)",
+            "Fuente": "nazca_forecast_sismico.py",
+            "Endpoint / referencia": "Mc MAXC · b MLE Aki · Poisson α=0.05 · Omori-Utsu MLE",
+            "Tipo": "CALCULADO",
+            "Caché": "Derivado de caché USGS",
+            "Uso en modelo": "Capa aparte del semáforo — indica si la tasa sísmica sube/baja/estable",
         },
         {
             "Variable": "Índice Kp",
@@ -1776,6 +1851,253 @@ def accion_sugerida_simple(nivel: str) -> str:
     }.get(nivel, "Revise con su equipo técnico.")
 
 
+def etiqueta_actividad_sismica(total_sismos: int) -> str:
+    if total_sismos >= 12:
+        return "Alta"
+    if total_sismos >= 5:
+        return "Moderada"
+    if total_sismos >= 2:
+        return "Baja"
+    return "Muy tranquila"
+
+
+def etiqueta_patron_historico(mejor_match: float) -> str:
+    if mejor_match >= 78:
+        return "Muy parecida a un gran terremoto"
+    if mejor_match >= 65:
+        return "Algo parecida a un gran terremoto"
+    if mejor_match >= 50:
+        return "Leve similitud"
+    return "Sin similitud notable"
+
+
+def riesgo_estacion_local(df_calibracion: pd.DataFrame, estacion_sel: str) -> float | None:
+    if df_calibracion is None or df_calibracion.empty or "Estación" not in df_calibracion.columns:
+        return None
+    fila = df_calibracion[df_calibracion["Estación"] == estacion_sel]
+    if fila.empty:
+        return None
+    try:
+        return float(fila.iloc[0]["Riesgo %"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def etiqueta_tension_zona_local(riesgo_pct: float | None) -> str:
+    if riesgo_pct is None:
+        return "Sin dato local"
+    if riesgo_pct >= 75:
+        return "Alta en esta zona"
+    if riesgo_pct >= 55:
+        return "Moderada en esta zona"
+    if riesgo_pct >= 40:
+        return "Baja en esta zona"
+    return "Tranquila en esta zona"
+
+
+def motivos_semaforo_simple(
+    nivel_alerta: dict,
+    puntaje: float,
+    mejor_match: float,
+    mejor_ev: str,
+    total_sismos: int,
+    b_val: float,
+    insar: float,
+    riesgo_local: float | None,
+    zona: str,
+) -> list[str]:
+    nivel = nivel_alerta.get("nivel", "VERDE")
+    if nivel == "VERDE":
+        return ["Ningún indicador supera los umbrales de observación reforzada."]
+
+    motivos: list[str] = []
+    if total_sismos >= 12:
+        motivos.append(f"**{total_sismos}** temblores en 14 días cerca de esta zona (actividad alta).")
+    elif total_sismos >= 5:
+        motivos.append(f"**{total_sismos}** temblores en 14 días (actividad moderada).")
+    if mejor_match >= 65:
+        motivos.append(
+            f"Similitud **{mejor_match:.0f}%** con **{mejor_ev}** (solo referencia histórica)."
+        )
+    elif mejor_match >= 50:
+        motivos.append(f"Cierta similitud (**{mejor_match:.0f}%**) con el patrón de **{mejor_ev}**.")
+    if puntaje >= 55:
+        motivos.append(f"Índice de vigilancia del modelo en **{puntaje:.0f}%**.")
+    if b_val < 0.68 and total_sismos >= 8:
+        motivos.append(f"Enjambre sísmico **inusual** (b-value {b_val}).")
+    if insar >= 55:
+        motivos.append(f"Movimiento lento del suelo **elevado** en {zona} (índice {insar:.0f}%).")
+    if riesgo_local is not None and riesgo_local >= 55:
+        motivos.append(
+            f"Índice de vigilancia **local** en **{zona}**: **{riesgo_local:.0f}%**."
+        )
+    if nivel_alerta.get("origen") == "ruptura" and b_val <= 0.68:
+        motivos.append("El modelo detecta una posible **firma de enjambre** pre-ruptura.")
+    if not motivos:
+        motivos.append(nivel_alerta.get("mensaje", "El modelo sugiere seguimiento reforzado."))
+    return motivos
+
+
+ESTILO_SEMAFORO_NIVEL = {
+    "VERDE": {
+        "color": "#3fb950",
+        "bg": "rgba(63, 185, 80, 0.10)",
+        "border": "#3fb950",
+        "icono": "🟢",
+    },
+    "AMARILLO": {
+        "color": "#d29922",
+        "bg": "rgba(210, 153, 34, 0.12)",
+        "border": "#d29922",
+        "icono": "🟡",
+    },
+    "NARANJO": {
+        "color": "#db6d28",
+        "bg": "rgba(219, 109, 40, 0.12)",
+        "border": "#db6d28",
+        "icono": "🟠",
+    },
+    "ROJO": {
+        "color": "#f85149",
+        "bg": "rgba(248, 81, 73, 0.12)",
+        "border": "#f85149",
+        "icono": "🔴",
+    },
+}
+
+ESTILO_PANEL_GR = {
+    "color": "#39d4d6",
+    "bg": "rgba(57, 212, 214, 0.08)",
+    "border": "#39d4d6",
+}
+
+
+def _cabecera_panel_sistema(
+    numero: str,
+    nombre: str,
+    descripcion: str,
+    estilo: dict,
+    clase_extra: str = "",
+) -> None:
+    color = estilo.get("border", estilo.get("color", "#58a6ff"))
+    bg = estilo.get("bg", "rgba(88, 166, 255, 0.08)")
+    st.markdown(
+        f"""
+        <div class="nazca-sistema-panel {clase_extra}" style="border-color:{color};background:{bg};">
+            <div class="nazca-sistema-header">
+                <span class="nazca-sistema-badge" style="border-color:{color};color:{color};">
+                    SISTEMA {numero} · {nombre}
+                </span>
+                <span class="nazca-sistema-sub">{descripcion}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _badge_veredicto_tendencia(estilo: dict, texto: str, detalle: str = "") -> None:
+    color = estilo.get("color", "#58a6ff")
+    bg = estilo.get("bg", "rgba(88, 166, 255, 0.14)")
+    icono = estilo.get("icono", "→")
+    detalle_html = f'<span style="font-size:.82rem;font-weight:400;color:#8b949e;margin-left:8px;">{detalle}</span>' if detalle else ""
+    st.markdown(
+        f"""
+        <div class="nazca-veredicto-badge" style="border-color:{color};background:{bg};color:{color};">
+            <span class="nazca-veredicto-icono">{icono}</span>
+            <span>{texto}</span>
+            {detalle_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_panel_tendencia_gr(fc: dict, zona: str, tecnico: bool = False) -> None:
+    """Sistema 2 — tendencia científica GR / Omori-Utsu (independiente del semáforo)."""
+    if not fc:
+        return
+    _cabecera_panel_sistema(
+        "2",
+        "TENDENCIA GR / OMORI",
+        "Leyes empíricas estándar (Gutenberg-Richter + Omori-Utsu) · "
+        f"Catálogo USGS 14D de **{zona}** · No predice fecha ni magnitud de gran sismo",
+        ESTILO_PANEL_GR,
+        "nazca-panel-gr",
+    )
+
+    est = fc.get("estilo") or ESTILO_PANEL_GR
+    t = fc.get("tendencia") or {}
+    test = t.get("test") or {}
+    p_txt = f"p={test.get('p_value', '—')}" if test else ""
+    _badge_veredicto_tendencia(
+        est,
+        f"Tendencia: {est.get('etiqueta_corta', '—')}",
+        f"Test Poisson {p_txt} · α=0.05",
+    )
+
+    if tecnico:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Veredicto GR", f"{fc.get('flecha', '·')} {t.get('direccion', '—')}")
+        c2.metric("b-value (MLE Aki)", f"{fc.get('b_value', 0):.3f}" if fc.get("confiable") else "—")
+        c3.metric("Mc (MAXC)", f"{fc.get('mc', 0):.2f}" if fc.get("confiable") else "—")
+        c4.metric("a-value GR", f"{fc.get('a_value', 0):.3f}" if fc.get("confiable") else "—")
+        c5.metric("λ(M≥Mc) / día", fc.get("lambda_mc_dia") if fc.get("confiable") else "—")
+
+        c6, c7, c8, c9 = st.columns(4)
+        c6.metric("7d reciente", t.get("reciente", 0))
+        c7.metric("7d anterior", t.get("anterior", 0))
+        ratio = test.get("ratio")
+        c8.metric("Ratio tasas", f"{ratio:.2f}" if ratio is not None else "—")
+        c9.metric("Esperados M≥4 (7d)", f"~{fc['esperado_m4_7d']:.2f}" if fc.get("esperado_m4_7d") is not None else "—")
+
+        om = fc.get("omori") or {}
+        if om.get("aplica"):
+            aj = om.get("ajuste") or {}
+            st.caption(
+                f"**Omori-Utsu:** {om.get('etiqueta', '').replace('**', '')} · "
+                f"Principal M{om.get('evento_principal', '?')} ({om.get('fecha_principal', '')})"
+            )
+            if aj:
+                st.caption(
+                    f"Parámetros ajustados: K={aj.get('K', '—')} · c={aj.get('c', '—')} d · "
+                    f"p={aj.get('p', '—')} · réplicas={aj.get('n_replicas', '—')}"
+                )
+        st.caption(f"Método: {fc.get('metodo', 'GR/Omori')} · eventos={fc.get('n_eventos', 0)} · "
+                   f"duración catálogo={fc.get('dias_catalogo', '—')} d")
+    else:
+        f1, f2, f3 = st.columns(3)
+        f1.metric(
+            "Tasa 7 días (Poisson)",
+            f"{fc.get('flecha', '·')} {t.get('reciente', 0)} vs {t.get('anterior', 0)} prev.",
+            delta=f"{t.get('delta_pct', 0):+.0f}% vs semana previa" if t.get("anterior") else None,
+        )
+        if fc.get("confiable"):
+            f2.metric("b-value (GR)", f"{fc['b_value']:.2f}", help="MLE tipo Aki con Mc MAXC")
+            esp4 = fc.get("esperado_m4_7d")
+            f3.metric(
+                "Esperados M≥4 (7 días)",
+                f"~{esp4:.1f}" if esp4 is not None else "—",
+                help="Poisson desde ley GR calibrada al catálogo",
+            )
+        else:
+            min_ev = getattr(forecast_mod, "MIN_EVENTOS_GR", 10) if forecast_mod else 10
+            f2.metric("b-value (GR)", "—", help=f"Requiere ≥{min_ev} sismos locales")
+            f3.metric("Esperados M≥4", "—")
+
+    st.info(fc.get("sintesis", ""))
+    om = fc.get("omori") or {}
+    if om.get("aplica") and not tecnico:
+        est_o = om.get("estilo") or est
+        st.markdown(
+            f"<span style='color:{est_o.get('color', '#8b949e')};font-weight:600;'>"
+            f"Enjambre {est_o.get('icono', '')} {om.get('etiqueta', '').replace('**', '')}</span>",
+            unsafe_allow_html=True,
+        )
+    elif om.get("etiqueta") and not om.get("aplica"):
+        st.caption(om["etiqueta"])
+
+
 def frase_estado_simple(zona: str, nivel: str, total_sismos: int) -> str:
     if nivel == "VERDE":
         return (
@@ -1823,11 +2145,24 @@ def render_vista_simple(
     zona = nombre_zona_simple(estacion_sel)
     nivel = nivel_alerta.get("nivel", "VERDE")
     color = nivel_alerta.get("color", "🟢")
+    est_sem = ESTILO_SEMAFORO_NIVEL.get(nivel, ESTILO_SEMAFORO_NIVEL["VERDE"])
 
     if modo_demo:
         st.error("Modo demostración activo — los valores son un ejemplo, no un evento real.")
 
-    st.markdown(f"## {color} {zona}")
+    _cabecera_panel_sistema(
+        "1",
+        "SEMÁFORO NAZCA",
+        "Vigilancia experimental multi-sensor (sismos, patrón M7+, GNSS, marea, atmósfera) · "
+        "Resume **qué tan tensa** está la zona",
+        est_sem,
+        "nazca-panel-semaforo",
+    )
+
+    st.markdown(
+        f"<h2 style='color:{est_sem['color']};margin-top:0;'>{color} {zona}</h2>",
+        unsafe_allow_html=True,
+    )
     st.markdown(frase_estado_simple(zona, nivel, total_sismos))
 
     if mejor_match >= 50:
@@ -1864,10 +2199,32 @@ def render_vista_simple(
     )
 
     st.markdown(f"**Qué hacer ahora:** {accion_sugerida_simple(nivel)}")
+
+    riesgo_local = riesgo_estacion_local(df_calibracion, estacion_sel)
+
+    motivos = motivos_semaforo_simple(
+        nivel_alerta, puntaje, mejor_match, mejor_ev, total_sismos, b_val, insar, riesgo_local, zona
+    )
+    if nivel != "VERDE":
+        st.markdown("**¿Por qué este semáforo?**")
+        for m in motivos:
+            st.markdown(f"- {m}")
+        sensores_calmados = insar < 55 and shoa < 5 and b_val >= 0.75
+        if sensores_calmados:
+            st.caption(
+                "Suelo, marea y enjambre se ven **normales** en esta zona; "
+                "el color del semáforo sube por **actividad sísmica local** o **patrón histórico** "
+                f"en **{zona}** (no por otras costas)."
+            )
+
     st.caption(f"Estado interno del modelo: {estado} · Chile 14D: {total_sismos_chile} sismos · USGS: {consultado_usgs}")
 
     if nodo_offline:
         st.warning("Señal de red limitada — lectura estimada por vecindad.")
+
+    fc = forecast_mod.resumen_forecast_sismico(df_sismos_local) if forecast_mod else None
+    if fc:
+        render_panel_tendencia_gr(fc, zona, tecnico=False)
 
     st.markdown("#### Mapa de actividad")
     st.caption("Puntos = temblores recientes. El círculo azul marca la zona que está mirando.")
@@ -1902,8 +2259,16 @@ def render_vista_simple(
         st.dataframe(_df_ui(df_show), height=220, use_container_width=True)
 
     with col_resumen:
-        st.markdown("#### Lectura rápida")
+        st.markdown("#### Lectura rápida (solo esta zona)")
         lectura = [
+            ("Sistema 1 · Semáforo NAZCA", f"{color} {nivel}"),
+            ("Sistema 2 · Tendencia GR/Omori", (
+                f"{fc['estilo']['icono']} {fc['estilo']['etiqueta_corta']}"
+                if fc and fc.get("estilo") else "Sin dato"
+            )),
+            ("Temblores cercanos (14 días)", etiqueta_actividad_sismica(total_sismos)),
+            ("Comparación con gran terremoto", etiqueta_patron_historico(mejor_match)),
+            ("Tensión en esta zona", etiqueta_tension_zona_local(riesgo_local)),
             ("Movimiento lento del suelo", "Normal" if insar < 55 else ("Elevado" if insar < 75 else "Alto")),
             ("Marea / costa", "Normal" if shoa < 5 else ("Alterada" if shoa < 12 else "Muy alterada")),
             ("Actividad de enjambre", "Típica" if b_val >= 0.75 else ("Inusual" if b_val >= 0.68 else "Muy inusual")),
@@ -1911,10 +2276,22 @@ def render_vista_simple(
         for etiqueta, valor in lectura:
             st.markdown(f"- **{etiqueta}:** {valor}")
 
-        if not df_tension_tabla.empty and "tension_pct" in df_tension_tabla.columns:
-            n_alta = int((df_tension_tabla["tension_pct"] >= 70).sum())
-            if n_alta:
-                st.caption(f"{n_alta} zona(s) del litoral con tensión alta en el modelo.")
+    if auditoria_mod:
+        resumen_aud = auditoria_mod.resumen_auditoria_estacion(estacion_sel)
+        if resumen_aud["total"] > 0:
+            with st.expander("Historial de alertas de esta zona (auditoría)"):
+                a1, a2, a3, a4 = st.columns(4)
+                a1.metric("Alertas registradas", resumen_aud["total"])
+                a2.metric("Pendientes", resumen_aud["pendiente"])
+                a3.metric("Con evento M5+", resumen_aud["acierto"])
+                a4.metric("Sin evento (30d)", resumen_aud["falso_positivo"])
+                st.caption(
+                    "Criterio: tras alerta amarilla/naranja/roja, se revisa si hubo sismo **M≥5** "
+                    f"dentro de **{auditoria_mod.VENTANA_EVAL_DIAS} días** y **{auditoria_mod.RADIO_EVAL_KM} km**."
+                )
+                df_aud = auditoria_mod.tabla_auditoria_estacion(estacion_sel)
+                if not df_aud.empty:
+                    st.dataframe(_df_ui(df_aud), use_container_width=True, hide_index=True)
 
     with st.expander("Ver números técnicos (opcional)"):
         t1, t2, t3, t4 = st.columns(4)
@@ -2315,6 +2692,21 @@ df_calibracion = construir_calibracion_estaciones(
 )
 nivel_alerta = clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar)
 
+if auditoria_mod and not modo_demo:
+    riesgo_loc_aud = riesgo_estacion_local(df_calibracion, estacion_sel)
+    motivos_aud = motivos_semaforo_simple(
+        nivel_alerta, puntaje, mejor_match, mejor_ev, total_sismos, b_val, insar,
+        riesgo_loc_aud, nombre_zona_simple(estacion_sel),
+    )
+    clave_auditoria = f"{estacion_sel}_{bloque}_{nivel_alerta['nivel']}"
+    if st.session_state.get("ultima_auditoria") != clave_auditoria:
+        auditoria_mod.registrar_alerta_semaforo(
+            estacion_sel, config, nivel_alerta, puntaje, mejor_match, mejor_ev,
+            total_sismos, motivos=motivos_aud, clave_bloque=clave_auditoria,
+        )
+        auditoria_mod.actualizar_resultados_auditoria(df_sismos)
+        st.session_state["ultima_auditoria"] = clave_auditoria
+
 clave_evidencia = f"evidencia_{estacion_sel}_{bloque}_{nivel_alerta['nivel']}_{round(puntaje, 1)}_{round(mejor_match, 1)}"
 if not modo_demo and st.session_state.get("ultima_evidencia") != clave_evidencia:
     registrar_evidencia_preevento(
@@ -2453,6 +2845,33 @@ with tab_vivo:
             )
         else:
             st.info(f"{nivel_alerta['color']} Nivel verde: {nivel_alerta['mensaje']}")
+
+        zona_tec = nombre_zona_simple(estacion_sel)
+        est_sem_tec = ESTILO_SEMAFORO_NIVEL.get(
+            nivel_alerta.get("nivel", "VERDE"), ESTILO_SEMAFORO_NIVEL["VERDE"]
+        )
+        _cabecera_panel_sistema(
+            "1",
+            "SEMÁFORO NAZCA",
+            "Índice de vigilancia experimental (match M7+, sensores, umbrales dinámicos) · "
+            f"Nodo **{zona_tec}**",
+            est_sem_tec,
+            "nazca-panel-semaforo",
+        )
+        s1, s2, s3, s4, s5 = st.columns(5)
+        s1.metric("Nivel", f"{nivel_alerta['color']} {nivel_alerta['nivel']}")
+        s2.metric("Match NAZCA", f"{puntaje:.1f}%")
+        s3.metric("Patrón M7+", f"{mejor_match:.1f}%")
+        s4.metric("Sismos 14D local", total_sismos)
+        s5.metric("Ventana", nivel_alerta.get("ventana", "—"))
+        st.caption(
+            f"Semáforo: {nivel_alerta.get('mensaje', '')} · "
+            "Este sistema **no** usa GR/Omori; es independiente del bloque siguiente."
+        )
+
+        if forecast_mod:
+            fc_tec = forecast_mod.resumen_forecast_sismico(df_sismos_local)
+            render_panel_tendencia_gr(fc_tec, zona_tec, tecnico=True)
 
         st.caption(log_filtro)
         if nodo_offline:

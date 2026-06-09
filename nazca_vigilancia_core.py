@@ -18,6 +18,11 @@ import nazca_conductividad as conductividad
 import nazca_gnss as gnss
 import nazca_shoa as shoa_ioc
 
+try:
+    import nazca_auditoria_semaforo as auditoria
+except ImportError:
+    auditoria = None
+
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / ".nazca_cache"
 COOLDOWN_FILE = CACHE_DIR / "telegram_cooldown_vigilancia.json"
@@ -337,8 +342,22 @@ def ejecutar_vigilancia(secrets: dict | None = None, ttl_seg: int = TTL_SEG_DEFA
     resultados = []
     alertas_enviadas = 0
 
+    bloque_aud = int(ahora_chile().timestamp() // ttl_seg)
     for estacion, config in ESTACIONES_CONFIG.items():
         ev = evaluar_estacion(estacion, config, df_sismos, kp, consultado_usgs, ttl_seg)
+        if auditoria and not dry_run:
+            nivel_nom = (ev.get("nivel") or {}).get("nivel", "VERDE")
+            clave_aud = f"{estacion}_{bloque_aud}_{nivel_nom}"
+            auditoria.registrar_alerta_semaforo(
+                estacion,
+                config,
+                ev["nivel"],
+                ev["puntaje"],
+                ev["mejor_match"],
+                ev["mejor_ev"],
+                ev["total_sismos"],
+                clave_bloque=clave_aud,
+            )
         disparar, motivo, clave = alertas.evaluar_disparo_telegram(
             estacion,
             ev["mejor_ev"],
@@ -386,6 +405,9 @@ def ejecutar_vigilancia(secrets: dict | None = None, ttl_seg: int = TTL_SEG_DEFA
             cooldown.set(clave)
             alertas_enviadas += 1
         ev["accion"] = f"admin={ok_admin} subs={subs_ok} err={subs_err}"
+
+    if auditoria and not dry_run:
+        auditoria.actualizar_resultados_auditoria(df_sismos)
 
     return {
         "estaciones": len(resultados),
