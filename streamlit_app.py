@@ -16,7 +16,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-08-v11"
+APP_BUILD = "2026-06-08-v13"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -45,6 +45,7 @@ cond_mod, _err_cond = _cargar_modulo_local("nazca_conductividad", "nazca_conduct
 shoa_mod, _err_shoa = _cargar_modulo_local("nazca_shoa", "nazca_shoa.py")
 auditoria_mod, _err_auditoria = _cargar_modulo_local("nazca_auditoria_semaforo", "nazca_auditoria_semaforo.py")
 forecast_mod, _err_forecast = _cargar_modulo_local("nazca_forecast_sismico", "nazca_forecast_sismico.py")
+pipeline_lab, _err_pipeline = _cargar_modulo_local("nazca_pipeline_lab", "nazca_pipeline_lab.py")
 alertas, _err_alertas = _cargar_modulo_local("nazca_alertas", "nazca_alertas.py")
 
 # ==============================================================================
@@ -717,20 +718,20 @@ def enviar_telegram(mensaje, chat_id=None):
         return False, "Falta TELEGRAM_TOKEN en secrets (.streamlit/secrets.toml o Streamlit Cloud)."
     if not destino:
         return False, "Falta chat_id destino o TELEGRAM_CHAT_ID en secrets."
+    texto = sanitizar_texto(mensaje)
     try:
         res = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={
                 "chat_id": destino,
-                "text": sanitizar_texto(mensaje),
-                "parse_mode": "HTML",
+                "text": texto,
                 "disable_web_page_preview": True,
             },
-            timeout=10,
+            timeout=12,
         )
         if res.status_code == 200:
             return True, "Notificacion enviada."
-        return False, f"Telegram HTTP {res.status_code}: {res.text[:160]}"
+        return False, f"Telegram HTTP {res.status_code}: {res.text[:200]}"
     except requests.RequestException as exc:
         return False, f"Error Telegram: {exc}"
 
@@ -818,7 +819,7 @@ def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo
     return f"Suscriptores Chile notificados: {enviados} | errores: {errores}"
 
 
-def enviar_prueba_suscriptores(mensaje):
+def enviar_prueba_suscriptores(mensaje, fallback_chat_principal=True):
     enviados = 0
     errores = 0
     for sub in cargar_suscriptores_chile():
@@ -827,7 +828,84 @@ def enviar_prueba_suscriptores(mensaje):
         ok, _ = enviar_telegram(mensaje, chat_id=sub.get("chat_id"))
         enviados += 1 if ok else 0
         errores += 0 if ok else 1
+    if enviados == 0 and errores == 0 and fallback_chat_principal:
+        ok, msg = enviar_telegram(mensaje)
+        if ok:
+            return 1, 0
+        return 0, 1 if msg else 0
     return enviados, errores
+
+
+def render_panel_demo_telegram(
+    estacion_sel,
+    estado,
+    puntaje,
+    b_val,
+    total_sismos,
+    insar,
+    cond,
+    shoa,
+    mejor_ev,
+    mejor_match,
+    consultado_usgs,
+    nivel_alerta,
+    admin_activo,
+    telegram_activo,
+    modo_demo,
+    sirena_activa,
+    telegram_estado="",
+    key_prefix="demo",
+):
+    """Botones de simulacion catastrofica Telegram (admin + demo)."""
+    if not admin_activo or not modo_demo:
+        return
+    st.markdown("#### Simulacion catastrofica · Telegram")
+    if not telegram_activo:
+        st.warning(
+            "Activa **Telegram vigilancia Chile** en la barra lateral para enviar la demo."
+        )
+        return
+    if not telegram_configurado():
+        st.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en .streamlit/secrets.toml")
+        return
+    if telegram_estado:
+        st.caption(f"Estado vigilancia auto: {telegram_estado}")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Enviar demo emergencia Telegram", use_container_width=True, key=f"{key_prefix}_tg_demo"):
+            mensaje_demo = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                nivel_alerta, nivel_alerta["ventana"],
+                motivo_disparo="Prueba demo admin (simulacion catastrofica)",
+                modo_demo=True,
+            )
+            ok_demo, msg_demo = enviar_telegram(mensaje_demo)
+            if sirena_activa:
+                render_sirena_alerta()
+            if ok_demo:
+                st.success(msg_demo)
+            else:
+                st.error(msg_demo)
+    with c2:
+        if st.button("Demo a suscriptores", use_container_width=True, key=f"{key_prefix}_tg_subs"):
+            mensaje_demo_suscriptores = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                nivel_alerta, nivel_alerta["ventana"],
+                motivo_disparo="Prueba demo suscriptores",
+                modo_demo=True,
+            )
+            enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
+            if sirena_activa:
+                render_sirena_alerta()
+            if enviados:
+                st.success(f"Demo enviada: {enviados} destino(s) | errores: {errores}")
+            else:
+                st.error(
+                    f"No se pudo enviar (errores: {errores}). "
+                    "Revisa TELEGRAM_CHAT_ID o suscriptores activos."
+                )
 
 
 def contar_suscriptores_activos():
@@ -1169,6 +1247,45 @@ def _render_mundo_lab_ui(admin_activo, ttl_seg, ttl_horas, nodo_sel, forzar, mod
         if _err_mundo:
             st.warning(f"Módulo externo no cargó ({_err_mundo}). Usando versión integrada en streamlit_app.py.")
         _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo)
+
+
+def _pipeline_lab_activo() -> bool:
+    return bool(
+        pipeline_lab and getattr(pipeline_lab, "MODULO_PIPELINE_LAB_ACTIVO", False)
+    )
+
+
+def _render_pipeline_lab_ui(
+    admin_activo,
+    estacion_sel,
+    config,
+    nivel_alerta,
+    puntaje,
+    b_val,
+    mejor_match,
+    total_sismos,
+    df_sismos_local,
+):
+    if _pipeline_lab_activo():
+        pipeline_lab.render_pipeline_lab(
+            admin_activo=admin_activo,
+            estacion_sel=estacion_sel,
+            config=config,
+            ctx_principal={
+                "nivel": nivel_alerta.get("nivel", "VERDE"),
+                "color": nivel_alerta.get("color", "🟢"),
+                "puntaje": puntaje,
+                "b_val": b_val,
+                "mejor_match": mejor_match,
+                "total_sismos": total_sismos,
+            },
+            df_sismos_local=df_sismos_local,
+        )
+    else:
+        st.info(
+            "PIPELINE LAB desactivado. Para habilitar: `MODULO_PIPELINE_LAB_ACTIVO = True` en "
+            "`nazca_pipeline_lab.py` o sube el archivo al servidor."
+        )
 
 
 def filtrar_sismos_estacion(df_sismos, lat, lon, radio_km=RADIO_ESTACION_KM):
@@ -2141,6 +2258,10 @@ def render_vista_simple(
     modo_demo,
     mapa_tect,
     nodo_offline,
+    admin_activo=False,
+    telegram_activo=False,
+    sirena_activa=False,
+    telegram_estado="",
 ):
     zona = nombre_zona_simple(estacion_sel)
     nivel = nivel_alerta.get("nivel", "VERDE")
@@ -2300,6 +2421,13 @@ def render_vista_simple(
         t3.metric("Similitud M7+", f"{mejor_match:.1f}%")
         t4.metric("Marea residual", f"{shoa:.1f} cm")
         st.caption(f"Conductividad proxy: {cond:.2f} mS/m · Patrón más parecido: {mejor_ev}")
+
+    render_panel_demo_telegram(
+        estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+        mejor_ev, mejor_match, consultado_usgs, nivel_alerta,
+        admin_activo, telegram_activo, modo_demo, sirena_activa,
+        telegram_estado=telegram_estado, key_prefix="simple",
+    )
 
 
 # ==============================================================================
@@ -2618,6 +2746,10 @@ if modo_demo:
         f"Demo: **{estacion_sel}** · firma **{ESCENARIO_DEMO_CATASTROFICO['evento_ref']}** "
         f"({ESCENARIO_DEMO_CATASTROFICO['mag_ref']})"
     )
+    if not telegram_activo:
+        st.sidebar.caption(
+            "Para probar Telegram en la demo: activa **Telegram vigilancia Chile** abajo."
+        )
     if nodo_demo in _nodos_mundo:
         st.sidebar.caption(f"MUNDO LAB demo: **{nodo_demo}** · ref. {ESCENARIO_DEMO_MUNDO['evento_ref']}")
 
@@ -2735,7 +2867,11 @@ if telegram_activo:
             telegram_estado = f"{telegram_estado} {estado_suscriptores}"
             st.session_state[detalle_notificacion] = ahora_chile()
     else:
-        telegram_estado = detalle_notificacion
+        telegram_estado = (
+            "Modo demo: envio automatico desactivado. Usa el boton de demo en la pestana VIVO."
+            if modo_demo
+            else detalle_notificacion
+        )
 
 # ==============================================================================
 # INTERFAZ
@@ -2786,12 +2922,9 @@ else:
 
 if modo_simple:
     tab_vivo, tab_acerca = st.tabs(["MONITOREO", "ACERCA DE"])
-    tab_hist = tab_cal = tab_calidad = tab_suscripcion = tab_evidencia = tab_mundo = None
+    tab_hist = tab_cal = tab_calidad = tab_suscripcion = tab_evidencia = tab_mundo = tab_pipeline = None
 else:
-    (
-        tab_vivo, tab_hist, tab_cal, tab_calidad, tab_acerca,
-        tab_suscripcion, tab_evidencia, tab_mundo,
-    ) = st.tabs([
+    _tabs_tecnico = [
         "ESCANEO EN VIVO",
         "COMPARATIVA M7+",
         "CALIBRACIÓN ESTACIONES",
@@ -2800,7 +2933,19 @@ else:
         "SUSCRIPCIÓN TELEGRAM",
         "EVIDENCIA Y VALIDACIÓN",
         "MUNDO (LAB)",
-    ])
+    ]
+    if _pipeline_lab_activo():
+        _tabs_tecnico.append("PIPELINE (LAB)")
+    _tabs_objs = st.tabs(_tabs_tecnico)
+    tab_vivo = _tabs_objs[0]
+    tab_hist = _tabs_objs[1]
+    tab_cal = _tabs_objs[2]
+    tab_calidad = _tabs_objs[3]
+    tab_acerca = _tabs_objs[4]
+    tab_suscripcion = _tabs_objs[5]
+    tab_evidencia = _tabs_objs[6]
+    tab_mundo = _tabs_objs[7]
+    tab_pipeline = _tabs_objs[8] if _pipeline_lab_activo() else None
 
 with tab_vivo:
     if modo_simple:
@@ -2809,6 +2954,10 @@ with tab_vivo:
             mejor_ev, mejor_match, estado, b_val, insar, shoa, cond,
             df_sismos, df_sismos_local, df_calibracion, config, consultado_usgs,
             modo_demo, mapa_tect, nodo_offline,
+            admin_activo=admin_activo,
+            telegram_activo=telegram_activo,
+            sirena_activa=sirena_activa,
+            telegram_estado=telegram_estado,
         )
     else:
         if modo_demo and admin_activo:
@@ -2883,41 +3032,20 @@ with tab_vivo:
 
         if telegram_activo and admin_activo:
             st.caption(f"Telegram vigilancia M7+: {telegram_estado}")
-            if st.button("Enviar prueba Telegram", use_container_width=True):
+            if st.button("Enviar prueba Telegram", use_container_width=True, key="tec_tg_prueba"):
                 ok_test, msg_test = enviar_telegram(
                     "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
                 )
                 if ok_test:
                     st.success(msg_test)
                 else:
-                    st.warning(msg_test)
-            if modo_demo and st.button("Enviar demo de emergencia Telegram", use_container_width=True):
-                mensaje_demo = construir_mensaje_telegram(
-                    estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-                    mejor_ev, mejor_match, consultado_usgs,
-                    nivel_alerta, nivel_alerta["ventana"],
-                    motivo_disparo="Prueba demo admin",
-                    modo_demo=True,
-                )
-                ok_demo, msg_demo = enviar_telegram(mensaje_demo)
-                if sirena_activa:
-                    render_sirena_alerta()
-                if ok_demo:
-                    st.success(msg_demo)
-                else:
-                    st.warning(msg_demo)
-            if modo_demo and st.button("Enviar demo de emergencia a suscriptores", use_container_width=True):
-                mensaje_demo_suscriptores = construir_mensaje_telegram(
-                    estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-                    mejor_ev, mejor_match, consultado_usgs,
-                    nivel_alerta, nivel_alerta["ventana"],
-                    motivo_disparo="Prueba demo suscriptores",
-                    modo_demo=True,
-                )
-                enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
-                if sirena_activa:
-                    render_sirena_alerta()
-                st.info(f"Demo enviada a suscriptores activos: {enviados} | errores: {errores}")
+                    st.error(msg_test)
+        render_panel_demo_telegram(
+            estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+            mejor_ev, mejor_match, consultado_usgs, nivel_alerta,
+            admin_activo, telegram_activo, modo_demo, sirena_activa,
+            telegram_estado=telegram_estado, key_prefix="tec",
+        )
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Estado", f"{icono}")
@@ -3353,6 +3481,13 @@ if not modo_simple:
             admin_activo, ttl_seg, ttl_horas, nodo_mundo_sel,
             forzar_mundo, modo_sat, modo_demo, kp,
         )
+
+    if tab_pipeline is not None:
+        with tab_pipeline:
+            _render_pipeline_lab_ui(
+                admin_activo, estacion_sel, config,
+                nivel_alerta, puntaje, b_val, mejor_match, total_sismos, df_sismos_local,
+            )
 
 with tab_acerca:
     render_tab_acerca_de(ttl_seg, ttl_horas, consultado_usgs, consultado_noaa)

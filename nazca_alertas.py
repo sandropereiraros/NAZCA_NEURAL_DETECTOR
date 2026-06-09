@@ -325,7 +325,6 @@ def enviar_telegram(mensaje: str, chat_id=None, secrets: dict[str, str] | None =
             json={
                 "chat_id": destino,
                 "text": sanitizar_texto(mensaje),
-                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             },
             timeout=12,

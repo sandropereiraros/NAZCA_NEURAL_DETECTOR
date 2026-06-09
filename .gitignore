@@ -1,4 +1,5 @@
 .nazca_cache/
+data/pipeline_lab/
 __pycache__/
 *.pyc
 *.py[cod]

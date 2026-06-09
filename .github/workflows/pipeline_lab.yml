@@ -1,0 +1,44 @@
+name: Pipeline LAB NAZCA
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restaurar caché SQLite pipeline
+        uses: actions/cache@v4
+        with:
+          path: data/pipeline_lab
+          key: nazca-pipeline-sqlite-v1
+          restore-keys: |
+            nazca-pipeline-sqlite-v1
+
+      - name: Instalar dependencias
+        run: pip install pandas numpy requests scikit-learn joblib
+
+      - name: Bootstrap inicial si DB vacía
+        run: |
+          python - <<'PY'
+          import nazca_catalogo_db as c
+          c.asegurar_db()
+          if c.resumen_db()["total"] < 200:
+              import subprocess, sys
+              subprocess.check_call([
+                  sys.executable, "scripts/pipeline/ejecutar_pipeline.py",
+                  "--bootstrap", "--usgs-desde", "2018", "--csn-dias-backfill", "60",
+              ])
+          PY
+
+      - name: Ejecutar pipeline (sync + ML)
+        run: python scripts/pipeline/ejecutar_pipeline.py --todo
+

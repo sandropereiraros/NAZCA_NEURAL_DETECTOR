@@ -1,0 +1,3 @@
+﻿fecha_alerta,estacion,lat,lon,nivel,puntaje,match_m7,patron_m7,sismos_locales_14d,motivos,ventana_eval_dias,resultado,fecha_evento,mag_evento,lugar_evento,dias_anticipacion,clave_bloque
+2026-06-09 01:18:27,Antofagasta / Taltal (85442),-23.65,-70.4,AMARILLO,18.77,44.3,Sismo Constitución 2012,15,**15** temblores en 14 días cerca de esta zona (actividad alta).,30,PENDIENTE,,,,,Antofagasta / Taltal (85442)_82452_AMARILLO
+2026-06-09 02:27:28,Antofagasta / Taltal (85442),-23.65,-70.4,AMARILLO,18.73,44.3,Sismo Constitución 2012,15,**15** temblores en 14 días cerca de esta zona (actividad alta).,30,PENDIENTE,,,,,Antofagasta / Taltal (85442)_82453_AMARILLO

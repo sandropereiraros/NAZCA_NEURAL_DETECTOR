@@ -4,3 +4,5 @@ numpy
 requests
 fpdf
 pydeck
+scikit-learn
+joblib
