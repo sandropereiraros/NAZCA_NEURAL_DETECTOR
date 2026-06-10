@@ -32,6 +32,7 @@ PIPELINE_LAB_VERSION = "v0.4-calibrado"
 RADIO_CRUCE_KM = 350
 MAG_UMBRAL_LAB = 5.0
 HORIZONTE_DIAS_LAB = 5
+PIPELINE_LAB_PROB_ELEVADA_PCT = 35.0  # Umbral más conservador para reducir falsas alertas
 
 ESTILO_PANEL = {
     "color": "#a371f7",
@@ -96,6 +97,41 @@ def prob_poisson_lab(esperado: float | None) -> float | None:
     return round((1.0 - math.exp(-float(esperado))) * 100.0, 1)
 
 
+def _render_nodo_mapa_simple(df: pd.DataFrame | None, lat: float, lon: float, label: str):
+    """Renderiza un mapa simple con el nodo central y marcadores M6+ si existen.
+    Usa `st.map` como fallback simple (compatible con Streamlit sin pydeck).
+    """
+    try:
+        mapa_df = pd.DataFrame([{"lat": lat, "lon": lon, "tipo": "Nodo"}])
+        if df is not None and not df.empty:
+            if "Latitud" in df.columns and "Longitud" in df.columns:
+                df2 = df.rename(columns={"Latitud": "lat", "Longitud": "lon", "Magnitud": "mag"})
+            elif "lat" in df.columns and "lon" in df.columns:
+                # attempt to find mag column name
+                mag_col = None
+                for c in ("mag", "Magnitud", "magnitude"):
+                    if c in df.columns:
+                        mag_col = c
+                        break
+                df2 = df.rename(columns={"lat": "lat", "lon": "lon"})
+                if mag_col:
+                    df2 = df2.rename(columns={mag_col: "mag"})
+            else:
+                df2 = pd.DataFrame()
+            if not df2.empty and "mag" in df2.columns:
+                m6 = df2[df2["mag"] >= 6.0]
+                if not m6.empty:
+                    mapa_df = pd.concat([mapa_df, m6[["lat", "lon"]]], ignore_index=True)
+        # Render
+        if mapa_df.empty:
+            st.caption("Sin datos para mostrar en mapa.")
+            return
+        st.map(mapa_df[["lat", "lon"]])
+        st.caption(f"Nodo: {label} · centro del mapa mostrado en azul")
+    except Exception as exc:
+        st.warning(f"No fue posible renderizar mapa simple: {exc}")
+
+
 def evaluar_sistema_principal(ctx: dict) -> dict:
     nivel = str(ctx.get("nivel", "VERDE")).upper()
     puntaje = float(ctx.get("puntaje", 0))
@@ -136,7 +172,7 @@ def evaluar_sistema_pipeline_lab(
     metodo = (inf_ml or {}).get("metodo", "poisson_fallback")
     prob_ml = (inf_ml or {}).get("prob_m5_5d_pct")
     prob_final = prob_ml if prob_ml is not None else prob_m5
-    elevada = prob_final is not None and prob_final >= 25.0
+    elevada = prob_final is not None and prob_final >= PIPELINE_LAB_PROB_ELEVADA_PCT
     calificado = (inf_ml or {}).get("calificado", metodo == "mlp_sklearn")
     if prob_ml is not None and metodo in ("mlp_sklearn", "mlp_calibrado") and calificado:
         cal_tag = inf_ml.get("metodo_calibracion") or "sin cal"
@@ -223,6 +259,38 @@ def tabla_cruce_principal_vs_pipeline(ctx: dict, df_pipe_local: pd.DataFrame, fc
         },
     ]
     return pd.DataFrame(filas)
+
+
+def _render_resumen_simple(
+    estacion_sel: str,
+    config: dict,
+    s3: dict,
+    conc: dict,
+) -> None:
+    if not config:
+        return
+    pais = config.get("pais") or config.get("region") or "zona"
+    lat = config.get("lat")
+    lon = config.get("lon")
+    radio = RADIO_CRUCE_KM
+    prob = s3.get("prob_m5_pct")
+    metodo = s3.get("metodo", "—")
+    ventana = "5 días" if prob is not None else "ventana por determinar"
+    detalle = s3.get("detalle", "Sin datos de riesgo ML")
+
+    st.markdown("#### Resumen rápido para usuarios")
+    st.markdown(
+        f"<div style='border:2px solid rgba(167, 139, 250, 0.9);border-radius:14px;padding:16px;"
+        f"background:rgba(99, 102, 241, 0.18);color:#f8fafc;'>"
+        f"<b>Nodo de atención:</b> {estacion_sel} ({pais})<br/>"
+        f"<b>Ubicación aproximada:</b> {lat if lat is not None else '—'}, {lon if lon is not None else '—'}<br/>"
+        f"<b>Radio de vigilancia:</b> ~{radio} km alrededor del nodo<br/>"
+        f"<b>Señal más relevante:</b> {s3.get('senal', 'NORMAL')} · {detalle}<br/>"
+        f"<b>Ventana corta:</b> {ventana}<br/>"
+        f"<b>Datos en vivo:</b> usados como insumo, no como predicción determinista<br/>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_pipeline_lab(
@@ -373,6 +441,8 @@ def render_pipeline_lab(
     s3 = evaluar_sistema_pipeline_lab(fc_pipe, prob_lab, inf_ml)
     conc = concordancia_lab(s1, s2, s3)
 
+    _render_resumen_simple(estacion_sel, config, s3, conc)
+
     st.markdown("#### Concordancia S1 / S2 / S3 (solo LAB)")
     st.markdown(
         f"<div style='border:2px solid {conc['color']};border-radius:12px;padding:14px;"
@@ -413,6 +483,30 @@ def render_pipeline_lab(
         })
         cols_show = [c for c in ["Fecha", "Magnitud", "Lugar", "Fuente", "Prof. km", "Distancia_km"] if c in show.columns]
         st.dataframe(show[cols_show].head(40), use_container_width=True, hide_index=True)
+
+    # Mapa simple del nodo y eventos M6+
+    col_map, col_tbl = st.columns([1.6, 1])
+    with col_map:
+        st.markdown("#### Mapa: Nodo y M6+ recientes (simple)")
+        _render_nodo_mapa_simple(df_raw, config["lat"], config["lon"], estacion_sel)
+    with col_tbl:
+        st.markdown("#### Eventos M6+ en SQLite (zona)")
+        if not df_pipe_local.empty:
+            mag_col = None
+            for c in ("Magnitud", "magnitud", "mag"):
+                if c in df_pipe_local.columns:
+                    mag_col = c
+                    break
+            if mag_col is not None:
+                m6_local = df_pipe_local[df_pipe_local[mag_col] >= 6.0]
+            else:
+                m6_local = pd.DataFrame()
+            if m6_local.empty:
+                st.caption("No hay M6+ en SQLite para esta zona.")
+            else:
+                st.dataframe(m6_local.head(20), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Sin eventos locales.")
 
     with st.expander("Todo el SQLite (muestra global)"):
         if df_nazca.empty:
