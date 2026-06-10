@@ -81,6 +81,43 @@ def _usar_mapa_nativo(modo_demo=False):
     if os.environ.get("NAZCA_USAR_PYDECK", "").strip() == "1" and not en_cloud:
         return False
     return True
+
+
+def _render_mundo_lab_probable_mapa(config, df_m6):
+    puntos = [
+        {
+            "lat": config["lat"],
+            "lon": config["lon"],
+            "size": 300,
+            "color": [59, 130, 246, 255],
+            "label": f"Nodo probable · {config['pais']}",
+        }
+    ]
+    if not df_m6.empty:
+        for _, r in df_m6.sort_values("Fecha", ascending=False).head(10).iterrows():
+            puntos.append({
+                "lat": float(r["Latitud"]),
+                "lon": float(r["Longitud"]),
+                "size": 220,
+                "color": [239, 68, 68, 210],
+                "label": f"M{float(r['Magnitud']):.1f} · {r.get('Lugar', '')}",
+            })
+    if mapa_tect:
+        mapa_tect.st_map_minimo(puntos, zoom=2, usar_color=True)
+    else:
+        df_map = pd.DataFrame(puntos)[["lat", "lon"]]
+        if df_map.empty:
+            st.caption("Sin datos para mapa.")
+            return
+        try:
+            st.map(df_map, latitude="lat", longitude="lon", zoom=2)
+        except TypeError:
+            st.map(df_map, latitude="lat", longitude="lon")
+    if not df_m6.empty:
+        st.caption("Mapa simplificado: nodo probable en azul y últimos eventos M6+ en rojo.")
+    else:
+        st.caption("Mapa simplificado: nodo probable en azul. No hay USGS M6+ en la ventana de 14 días.")
+
 EVIDENCIA_MUNDO_CSV = os.path.join(BASE_DIR, "nazca_evidencia_mundo.csv")
 CHILE_TZ = ZoneInfo("America/Santiago")
 CHILE_TZ_LABEL = "Chile continental (UTC-4)"
