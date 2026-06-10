@@ -844,10 +844,12 @@ def render_mundo_lab(
     else:
         st.info(f"📦 Caché MUNDO — USGS global: {consultado_usgs} | ventana {VENTANA_DIAS}D")
 
-    m1, m2, m3 = st.columns(3)
+    df_m6 = df_global[df_global["Magnitud"] >= 6.0] if not df_global.empty else pd.DataFrame()
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Sismos mundiales M4.5+ (sin Chile)", len(df_global))
-    m2.metric("Nodos CORE NETWORK", len(NODOS_MUNDO_CONFIG))
-    m3.metric("Caché APIs", f"{ttl_horas} h")
+    m2.metric("Eventos M6+ global", len(df_m6))
+    m3.metric("Nodos CORE NETWORK", len(NODOS_MUNDO_CONFIG))
+    m4.metric("Caché APIs", f"{ttl_horas} h")
 
     nodo_sel = nodo_sel or nodo_por_defecto()
     if nodo_sel not in NODOS_MUNDO_CONFIG:
@@ -873,6 +875,11 @@ def render_mundo_lab(
 
     res = procesar_nodo(nodo_sel, config, df_global, ttl_seg, modo_sat, kp, modo_demo=modo_demo)
     bloque = int(ahora_chile().timestamp() // ttl_seg)
+    if res["nivel"]["nivel"] in ("AMARILLO", "NARANJO", "ROJO"):
+        st.warning(
+            f"Nodo probable de tensión elevada: {nodo_sel} · nivel {res['nivel']['nivel']} · "
+            "señalizado en el mapa como área de atención."
+        )
 
     clave_ev = (
         f"mundo_{nodo_sel}_{bloque}_{res['nivel']['nivel']}_"
@@ -896,6 +903,9 @@ def render_mundo_lab(
         st.success(f"{res['nivel']['color']} {res['nivel']['mensaje']}")
 
     st.caption(res["log_filtro"])
+    if not df_m6.empty:
+        st.markdown("##### Eventos recientes M6+ global")
+        st.dataframe(_df_ui(df_m6[["Magnitud", "Lugar", "Fecha"]].head(10)), use_container_width=True, hide_index=True)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Estado", res["icono"])
@@ -932,6 +942,8 @@ def render_mundo_lab(
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
         st.markdown("#### Mapa global — Cinturón de Fuego + sismos USGS")
+        if res["nivel"]["nivel"] in ("AMARILLO", "NARANJO", "ROJO"):
+            st.info("El nodo seleccionado se marca como probable punto de atención si la tensión regional es alta.")
         mapa_renderizado = False
         if _usar_mapa_nativo(modo_demo):
             st.info(
@@ -981,6 +993,8 @@ def render_mundo_lab(
                 mapa_tect.st_map_minimo(mapa_df.to_dict("records"), zoom=3)
             else:
                 st.map(mapa_df[["lat", "lon"]], latitude="lat", longitude="lon")
+            if not df_m6.empty:
+                st.caption("M6+ recientes se muestran como puntos junto al nodo probable.")
 
     with col_tabla:
         st.caption(

@@ -1222,11 +1222,20 @@ def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
         nodo_sel = "Filipinas · Mindanao"
     nodo = _NODOS_MUNDO_INLINE[nodo_sel]
     df_g = _fetch_usgs_global_inline()
-    st.metric("Sismos mundiales USGS M4.5+ (sin Chile)", len(df_g))
+    df_m6 = df_g[df_g["Magnitud"] >= 6.0] if not df_g.empty else pd.DataFrame()
+    c1, c2 = st.columns(2)
+    c1.metric("Sismos mundiales USGS M4.5+ (sin Chile)", len(df_g))
+    c2.metric("Eventos mundiales USGS M6+ 14D", len(df_m6))
     st.markdown("#### Terremotos históricos MUNDIALES (Japón, Filipinas, Indonesia…)")
     st.dataframe(_df_ui(pd.DataFrame(_CATALOGO_MUNDO)), use_container_width=True, hide_index=True)
     df_nodo = filtrar_sismos_estacion(df_g, nodo["lat"], nodo["lon"], radio_km=400)
-    st.markdown(f"#### Mapa — Cinturón de Fuego + USGS · Nodo: **{nodo_sel}**")
+    df_m6_nodo = df_nodo[df_nodo["Magnitud"] >= 6.0] if not df_nodo.empty else pd.DataFrame()
+    st.markdown(f"#### Nodo probable M6+ activo: **{nodo_sel}**")
+    if not df_m6.empty:
+        st.markdown("##### Últimos USGS M6+ globales")
+        st.dataframe(_df_ui(df_m6[["Magnitud", "Lugar", "Fecha"]].head(10)), use_container_width=True, hide_index=True)
+    if not df_m6_nodo.empty:
+        st.info(f"Dentro del radio del nodo hay {len(df_m6_nodo)} evento(s) M6+ recientes.")
     _render_mapa_anillo_fuego(
         df_g, nodo["lat"], nodo["lon"], nodo_sel,
         zoom=2, altura=420, df_etiquetas=df_nodo, modo_demo=modo_demo,
