@@ -2,7 +2,6 @@ import importlib.util
 import json
 import os
 import shutil
-import sys
 import random
 import base64
 import unicodedata
@@ -14,10 +13,9 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-08-v13"
+APP_BUILD = "2026-06-08-v6"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -26,51 +24,35 @@ def _cargar_modulo_local(nombre, archivo):
     if not os.path.exists(ruta):
         return None, f"Falta archivo: {archivo}"
     try:
-        sys.modules.pop(nombre, None)
         spec = importlib.util.spec_from_file_location(nombre, ruta)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules[nombre] = mod
         spec.loader.exec_module(mod)
         return mod, None
     except Exception as exc:
-        sys.modules.pop(nombre, None)
         return None, f"Error cargando {archivo}: {exc}"
 
 
-informes_pdf, _err_informes = _cargar_modulo_local("nazca_informes_pdf", "nazca_informes_pdf.py")
-mapa_tect, _err_mapa = _cargar_modulo_local("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
 mundo_lab, _err_mundo = _cargar_modulo_local("nazca_mundo_lab", "nazca_mundo_lab.py")
-gnss_mod, _err_gnss = _cargar_modulo_local("nazca_gnss", "nazca_gnss.py")
-atmos_mod, _err_atmos = _cargar_modulo_local("nazca_atmosfera", "nazca_atmosfera.py")
-cond_mod, _err_cond = _cargar_modulo_local("nazca_conductividad", "nazca_conductividad.py")
-shoa_mod, _err_shoa = _cargar_modulo_local("nazca_shoa", "nazca_shoa.py")
-auditoria_mod, _err_auditoria = _cargar_modulo_local("nazca_auditoria_semaforo", "nazca_auditoria_semaforo.py")
-forecast_mod, _err_forecast = _cargar_modulo_local("nazca_forecast_sismico", "nazca_forecast_sismico.py")
-pipeline_lab, _err_pipeline = _cargar_modulo_local("nazca_pipeline_lab", "nazca_pipeline_lab.py")
-alertas, _err_alertas = _cargar_modulo_local("nazca_alertas", "nazca_alertas.py")
+mapa_tect, _err_mapa = _cargar_modulo_local("nazca_mapa_tectonico", "nazca_mapa_tectonico.py")
+informes_pdf, _err_informes = _cargar_modulo_local("nazca_informes_pdf", "nazca_informes_pdf.py")
 
 # ==============================================================================
 # CONFIGURACIÓN
 # ==============================================================================
 st.set_page_config(page_title=f"NAZCA CORE MONITOR v8.0 · {APP_BUILD}", layout="wide")
 
-if alertas is None:
-    st.error(f"No se pudo cargar nazca_alertas.py: {_err_alertas}")
-    st.stop()
-
 PESOS = {"SISMO_BVAL": 0.62, "INSAR": 0.18, "CONDUCT": 0.10, "SHOA": 0.06, "ATMOS": 0.01}
-UMBRAL_CRITICO = alertas.UMBRAL_CRITICO
-UMBRAL_NOTIFICACION_TELEGRAM = alertas.UMBRAL_NOTIFICACION_TELEGRAM
-UMBRAL_MATCH_M7_TELEGRAM = alertas.UMBRAL_MATCH_M7_TELEGRAM
-COOLDOWN_TELEGRAM_MIN = alertas.COOLDOWN_TELEGRAM_MIN
-UMBRAL_SIRENA_ROJA = alertas.UMBRAL_SIRENA_ROJA
+UMBRAL_CRITICO = 75.0
+UMBRAL_NOTIFICACION_TELEGRAM = 70.0
+UMBRAL_MATCH_M7_TELEGRAM = 80.0
+COOLDOWN_TELEGRAM_MIN = 60
+UMBRAL_SIRENA_ROJA = 85.0
 RADIO_ESTACION_KM = 350
 MAX_RIESGO_CON_TELEMETRIA_ESTIMADA = 74.0
 INTERVALOS_API = {"3 horas": 10800, "6 horas": 21600, "12 horas": 43200, "24 horas": 86400}
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nazca_cache")
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nazca_logo.png")
 SUSCRIPTORES_TELEGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_suscriptores_telegram.json")
-CANAL_SUSCRIPCION_CHILE = alertas.CANAL_SUSCRIPCION_CHILE
 EVIDENCIA_PREEVENTO_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nazca_evidencia_preevento.csv")
 CHILE_BOUNDS = {
     "min_lat": -56.0,
@@ -85,17 +67,6 @@ CHILE_TZ_LABEL = "Chile continental (UTC-4)"
 
 def ahora_chile():
     return datetime.now(CHILE_TZ).replace(tzinfo=None)
-
-
-def _df_ui(df):
-    if informes_pdf and hasattr(informes_pdf, "df_ui_seguro"):
-        return informes_pdf.df_ui_seguro(df)
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-    out = df.copy()
-    for col in out.columns:
-        out[col] = out[col].apply(lambda v: "" if pd.isna(v) else str(v))
-    return out
 
 
 def timestamp_usgs_a_chile(timestamp_ms):
@@ -195,48 +166,6 @@ st.markdown(
         letter-spacing: 1px;
     }
     h1, h2, h3 { font-family: 'Courier New', monospace !important; }
-    .nazca-sistema-panel {
-        border: 2px solid;
-        border-radius: 14px;
-        padding: 16px 18px 8px 18px;
-        margin: 0 0 18px 0;
-    }
-    .nazca-sistema-header {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px 14px;
-        margin-bottom: 12px;
-    }
-    .nazca-sistema-badge {
-        display: inline-block;
-        padding: 5px 12px;
-        border: 1px solid;
-        border-radius: 999px;
-        font-family: 'Courier New', monospace;
-        font-size: .78rem;
-        font-weight: 700;
-        letter-spacing: 1.6px;
-    }
-    .nazca-sistema-sub {
-        color: #8b949e;
-        font-size: .88rem;
-    }
-    .nazca-veredicto-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 16px;
-        border: 2px solid;
-        border-radius: 10px;
-        font-family: 'Courier New', monospace;
-        font-size: 1.05rem;
-        font-weight: 700;
-        margin: 4px 0 12px 0;
-    }
-    .nazca-veredicto-icono { font-size: 1.35rem; line-height: 1; }
-    .nazca-panel-semaforo { box-shadow: 0 0 22px rgba(210, 153, 34, .08); }
-    .nazca-panel-gr { box-shadow: 0 0 22px rgba(57, 212, 214, .1); }
     </style>
     """,
     unsafe_allow_html=True,
@@ -267,42 +196,6 @@ EVENTOS_M7 = [
     {"evento": "Terremoto Illapel 2015", "mag": "M8.3", "b_14d": 0.64, "sismos_14d": 44, "insar": 94.0, "cond": 4.2, "shoa": 5.0},
     {"evento": "Terremoto Melinka 2016", "mag": "M7.6", "b_14d": 0.71, "sismos_14d": 35, "insar": 85.5, "cond": 3.9, "shoa": 6.5},
 ]
-
-ESCENARIO_DEMO_CATASTROFICO = {
-    "estacion": "Coquimbo / Illapel (85540)",
-    "evento_ref": "Terremoto Illapel 2015",
-    "mag_ref": "M8.3",
-    "descripcion": (
-        "Ejemplo didáctico: estación Coquimbo–Illapel con firma de 14 días previa al M8.3 de 2015. "
-        "Cumple umbrales de alerta experimental. No es predicción ni alerta oficial."
-    ),
-    "b_value": 0.64,
-    "sismos_locales_14d": 44,
-    "sismos_chile_14d": 52,
-    "insar": 94.0,
-    "cond": 4.2,
-    "shoa": 5.0,
-    "presion": 1012.8,
-    "termico": 2.1,
-    "kp": 1,
-    "consultado_usgs": "DEMO · ventana 14D ficticia (Illapel 2015)",
-    "consultado_noaa": "DEMO · Kp simulado",
-}
-
-ESCENARIO_DEMO_MUNDO = {
-    "nodo": "Filipinas · Mindanao (complejo)",
-    "evento_ref": "Mindanao 2026",
-    "mag_ref": "M7.8",
-    "descripcion": (
-        "Ejemplo didáctico mundial: nodo Filipinas–Mindanao con firma previa al evento de referencia. "
-        "Simulación LAB — no es alerta oficial."
-    ),
-    "b_value": 0.67,
-    "sismos_locales_14d": 31,
-    "insar": 82.0,
-    "cond": 4.1,
-    "shoa": 14.0,
-}
 
 # ==============================================================================
 # CACHÉ EN DISCO (APIs en ventana móvil 14D, refresco recomendado cada 3-24 h)
@@ -651,11 +544,8 @@ def leer_bitacora_bytes():
 
 
 def obtener_secret(nombre):
-    valor = str(os.environ.get(nombre, "") or "").strip()
-    if valor:
-        return valor
     try:
-        return str(st.secrets.get(nombre, "") or "").strip()
+        return st.secrets.get(nombre, "")
     except Exception:
         return ""
 
@@ -681,16 +571,8 @@ def normalizar_suscriptores(suscriptores):
             "nivel_minimo": sub.get("nivel_minimo", "AMARILLO"),
             "activo": bool(sub.get("activo", True)),
             "registrado": sub.get("registrado", "secrets"),
-            "canal": str(sub.get("canal", CANAL_SUSCRIPCION_CHILE) or CANAL_SUSCRIPCION_CHILE).strip().lower(),
         })
     return normalizados
-
-
-def cargar_suscriptores_chile():
-    return [
-        sub for sub in cargar_suscriptores_telegram()
-        if sub.get("canal", CANAL_SUSCRIPCION_CHILE) == CANAL_SUSCRIPCION_CHILE
-    ]
 
 
 def apps_script_configurado():
@@ -732,25 +614,23 @@ def guardar_suscriptor_apps_script(suscriptor):
 
 def enviar_telegram(mensaje, chat_id=None):
     token = obtener_secret("TELEGRAM_TOKEN")
-    destino = str(chat_id or obtener_secret("TELEGRAM_CHAT_ID") or "").strip()
-    if not token:
-        return False, "Falta TELEGRAM_TOKEN en secrets (.streamlit/secrets.toml o Streamlit Cloud)."
-    if not destino:
-        return False, "Falta chat_id destino o TELEGRAM_CHAT_ID en secrets."
-    texto = sanitizar_texto(mensaje)
+    chat_id = chat_id or obtener_secret("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False, "Telegram no configurado en secrets."
     try:
         res = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={
-                "chat_id": destino,
-                "text": texto,
+                "chat_id": chat_id,
+                "text": sanitizar_texto(mensaje),
+                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             },
-            timeout=12,
+            timeout=10,
         )
         if res.status_code == 200:
             return True, "Notificacion enviada."
-        return False, f"Telegram HTTP {res.status_code}: {res.text[:200]}"
+        return False, f"Telegram HTTP {res.status_code}: {res.text[:160]}"
     except requests.RequestException as exc:
         return False, f"Error Telegram: {exc}"
 
@@ -796,7 +676,6 @@ def upsert_suscriptor_telegram(nombre, chat_id, estacion, nivel_minimo):
         "nivel_minimo": nivel_minimo,
         "activo": True,
         "registrado": ahora_chile().strftime("%Y-%m-%d %H:%M:%S"),
-        "canal": CANAL_SUSCRIPCION_CHILE,
     }
     actualizados = []
     reemplazado = False
@@ -824,7 +703,7 @@ def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo
         return "Modo demo: suscriptores no notificados."
     enviados = 0
     errores = 0
-    for sub in cargar_suscriptores_chile():
+    for sub in cargar_suscriptores_telegram():
         if not sub.get("activo", True):
             continue
         estacion_sub = sub.get("estacion", "Todas")
@@ -835,207 +714,105 @@ def enviar_alerta_suscriptores(mensaje, estacion_actual, nivel_alerta, modo_demo
         ok, _ = enviar_telegram(mensaje, chat_id=sub.get("chat_id"))
         enviados += 1 if ok else 0
         errores += 0 if ok else 1
-    return f"Suscriptores Chile notificados: {enviados} | errores: {errores}"
+    return f"Suscriptores notificados: {enviados} | errores: {errores}"
 
 
-def enviar_prueba_suscriptores(mensaje, fallback_chat_principal=True):
+def enviar_prueba_suscriptores(mensaje):
     enviados = 0
     errores = 0
-    for sub in cargar_suscriptores_chile():
+    for sub in cargar_suscriptores_telegram():
         if not sub.get("activo", True):
             continue
         ok, _ = enviar_telegram(mensaje, chat_id=sub.get("chat_id"))
         enviados += 1 if ok else 0
         errores += 0 if ok else 1
-    if enviados == 0 and errores == 0 and fallback_chat_principal:
-        ok, msg = enviar_telegram(mensaje)
-        if ok:
-            return 1, 0
-        return 0, 1 if msg else 0
     return enviados, errores
 
 
-def render_panel_demo_telegram(
-    estacion_sel,
-    estado,
-    puntaje,
-    b_val,
-    total_sismos,
-    insar,
-    cond,
-    shoa,
-    mejor_ev,
-    mejor_match,
-    consultado_usgs,
-    nivel_alerta,
-    admin_activo,
-    telegram_activo,
-    modo_demo,
-    sirena_activa,
-    telegram_estado="",
-    key_prefix="demo",
-):
-    """Botones de simulacion catastrofica Telegram (admin + demo)."""
-    if not admin_activo or not modo_demo:
-        return
-    st.markdown("#### Simulacion catastrofica · Telegram")
-    if not telegram_activo:
-        st.warning(
-            "Activa **Telegram vigilancia Chile** en la barra lateral para enviar la demo."
-        )
-        return
-    if not telegram_configurado():
-        st.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en .streamlit/secrets.toml")
-        return
-    if telegram_estado:
-        st.caption(f"Estado vigilancia auto: {telegram_estado}")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Enviar demo emergencia Telegram", use_container_width=True, key=f"{key_prefix}_tg_demo"):
-            mensaje_demo = construir_mensaje_telegram(
-                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-                mejor_ev, mejor_match, consultado_usgs,
-                nivel_alerta, nivel_alerta["ventana"],
-                motivo_disparo="Prueba demo admin (simulacion catastrofica)",
-                modo_demo=True,
-            )
-            ok_demo, msg_demo = enviar_telegram(mensaje_demo)
-            if sirena_activa:
-                render_sirena_alerta()
-            if ok_demo:
-                st.success(msg_demo)
-            else:
-                st.error(msg_demo)
-    with c2:
-        if st.button("Demo a suscriptores", use_container_width=True, key=f"{key_prefix}_tg_subs"):
-            mensaje_demo_suscriptores = construir_mensaje_telegram(
-                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-                mejor_ev, mejor_match, consultado_usgs,
-                nivel_alerta, nivel_alerta["ventana"],
-                motivo_disparo="Prueba demo suscriptores",
-                modo_demo=True,
-            )
-            enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
-            if sirena_activa:
-                render_sirena_alerta()
-            if enviados:
-                st.success(f"Demo enviada: {enviados} destino(s) | errores: {errores}")
-            else:
-                st.error(
-                    f"No se pudo enviar (errores: {errores}). "
-                    "Revisa TELEGRAM_CHAT_ID o suscriptores activos."
-                )
-
-
 def contar_suscriptores_activos():
-    return sum(1 for sub in cargar_suscriptores_chile() if sub.get("activo", True))
+    return sum(1 for sub in cargar_suscriptores_telegram() if sub.get("activo", True))
 
 
-class _SessionCooldown(alertas.CooldownStore):
-    def __init__(self, session_state):
-        self._ss = session_state
+def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo):
+    if not modo_demo and puntaje < UMBRAL_NOTIFICACION_TELEGRAM:
+        return False, "Riesgo bajo umbral Telegram."
+    if not modo_demo and mejor_match < UMBRAL_MATCH_M7_TELEGRAM:
+        return False, "Match M7+ bajo umbral Telegram."
 
-    def get(self, clave):
-        raw = self._ss.get(clave)
-        if not raw:
-            return None
-        if isinstance(raw, datetime):
-            return raw
-        try:
-            return datetime.fromisoformat(str(raw))
-        except ValueError:
-            return None
-
-    def set(self, clave, cuando=None):
-        self._ss[clave] = cuando or ahora_chile()
+    clave = f"telegram_{'demo_' if modo_demo else ''}{estacion}_{mejor_ev}"
+    ultimo = st.session_state.get(clave)
+    ahora = ahora_chile()
+    if ultimo and ahora - ultimo < timedelta(minutes=COOLDOWN_TELEGRAM_MIN):
+        restante = COOLDOWN_TELEGRAM_MIN - int((ahora - ultimo).total_seconds() // 60)
+        return False, f"Cooldown activo ({restante} min)."
+    return True, clave
 
 
-def debe_notificar_telegram(estacion, mejor_ev, puntaje, mejor_match, modo_demo, b_val, total_sismos, insar):
-    cooldown = _SessionCooldown(st.session_state)
-    disparar, detalle, clave = alertas.evaluar_disparo_telegram(
-        estacion, mejor_ev, puntaje, mejor_match, b_val, total_sismos, insar, modo_demo, cooldown
-    )
-    if disparar:
-        return True, clave, detalle
-    return False, detalle, ""
-
-
-def construir_mensaje_telegram(*args, **kwargs):
-    return alertas.construir_mensaje_telegram(*args, **kwargs)
-
-
-def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar=0.0):
-    return alertas.clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar)
-
-
-def render_sirena_alerta(duracion_seg=6):
-    """Alerta visual + tono de sirena en el navegador (Web Audio API)."""
-    st.error("SIRENA LOCAL: vigilancia roja experimental. Validar con fuentes oficiales.")
-    components.html(
-        f"""
-        <script>
-        (function () {{
-          const DUR = {int(duracion_seg)};
-          const AC = window.AudioContext || window.webkitAudioContext;
-          if (!AC) return;
-          const ctx = new AC();
-          function tocar() {{
-            const gain = ctx.createGain();
-            gain.gain.value = 0.28;
-            gain.connect(ctx.destination);
-            const osc = ctx.createOscillator();
-            osc.type = "square";
-            osc.connect(gain);
-            const t0 = ctx.currentTime;
-            osc.start(t0);
-            for (let i = 0; i < DUR * 2; i++) {{
-              osc.frequency.setValueAtTime(i % 2 ? 720 : 980, t0 + i * 0.42);
-            }}
-            osc.stop(t0 + DUR);
-            setTimeout(function () {{ ctx.close(); }}, (DUR + 0.6) * 1000);
-          }}
-          if (ctx.state === "suspended") {{
-            ctx.resume().then(tocar).catch(tocar);
-          }} else {{
-            tocar();
-          }}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
-
-
-def _entorno_streamlit_cloud():
-    env = os.environ.get("STREAMLIT_RUNTIME_ENV", "").lower()
-    return env in ("cloud", "community", "production") or bool(os.environ.get("STREAMLIT_SHARING"))
-
-
-def _usar_mapa_nativo(modo_demo=False):
-    # pydeck provoca removeChild en navegador/Cloud; st.map es estable.
-    # Solo usar pydeck en local si defines NAZCA_USAR_PYDECK=1
-    if os.environ.get("NAZCA_USAR_PYDECK", "").strip() == "1" and not _entorno_streamlit_cloud():
-        return False
-    return True
-
-
-def _render_mapa_st_map_nativo(df_sismos, est_lat, est_lon, zoom=4):
-    filas = []
-    if est_lat is not None and est_lon is not None:
-        filas.append({"lat": est_lat, "lon": est_lon})
-    if df_sismos is not None and not df_sismos.empty:
-        for _, r in df_sismos.iterrows():
-            filas.append({
-                "lat": float(r["Latitud"] if "Latitud" in r else r["lat"]),
-                "lon": float(r["Longitud"] if "Longitud" in r else r["lon"]),
-            })
-    if mapa_tect:
-        mapa_tect.st_map_minimo(filas, zoom=zoom)
-    elif filas:
-        st.map(pd.DataFrame(filas), latitude="lat", longitude="lon")
+def construir_mensaje_telegram(
+    estacion, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+    mejor_ev, mejor_match, consultado_usgs, nivel_alerta, ventana_vigilancia, modo_demo=False,
+):
+    if modo_demo:
+        encabezado = "NAZCA CORE MONITOR - SIMULACION DE EMERGENCIA\n"
+        nota_demo = "\nMODO DEMO ACTIVO: mensaje de prueba operacional, no corresponde a evento real.\n"
     else:
-        st.caption("Sin datos para mapa.")
-    st.caption("Mapa simplificado — un solo mapa en Escaneo en vivo (estable en Cloud).")
+        encabezado = "NAZCA CORE MONITOR - VIGILANCIA EXPERIMENTAL M7+\n"
+        nota_demo = ""
+    return (
+        encabezado +
+        "No es alerta oficial ni prediccion deterministica.\n\n"
+        f"Estacion: {estacion}\n"
+        f"Estado interno: {estado}\n"
+        f"Nivel de alerta: {nivel_alerta}\n"
+        f"Ventana vigilancia: {ventana_vigilancia}\n"
+        f"Indice vigilancia: {puntaje:.1f}%\n"
+        f"Patron M7+ similar: {mejor_ev} ({mejor_match:.1f}%)\n"
+        f"Sismos locales 14D: {total_sismos}\n"
+        f"b-value local: {b_val}\n"
+        f"InSAR estimado: {insar:.1f}%\n"
+        f"EM: {cond} mS/m | SHOA: {shoa} cm\n"
+        f"USGS: {consultado_usgs}\n\n"
+        f"{nota_demo}"
+        "Accion sugerida: revisar tendencia, generar PDF tecnico y validar con especialista."
+    )
+
+
+def clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos):
+    if puntaje >= UMBRAL_SIRENA_ROJA and mejor_match >= UMBRAL_MATCH_M7_TELEGRAM and b_val <= 0.70:
+        return {
+            "nivel": "ROJO",
+            "color": "🔴",
+            "ventana": "6 a 24 horas",
+            "mensaje": "Vigilancia maxima experimental. Requiere revision tecnica inmediata.",
+            "sirena": True,
+        }
+    if puntaje >= UMBRAL_NOTIFICACION_TELEGRAM and mejor_match >= UMBRAL_MATCH_M7_TELEGRAM:
+        return {
+            "nivel": "NARANJO",
+            "color": "🟠",
+            "ventana": "12 a 24 horas",
+            "mensaje": "Vigilancia alta experimental. Validar tendencia y fuentes externas.",
+            "sirena": False,
+        }
+    if puntaje >= 55 or mejor_match >= 65 or total_sismos >= 12:
+        return {
+            "nivel": "AMARILLO",
+            "color": "🟡",
+            "ventana": "24 a 36 horas",
+            "mensaje": "Observacion reforzada. Podrian presentarse cambios positivos o negativos en umbrales.",
+            "sirena": False,
+        }
+    return {
+        "nivel": "VERDE",
+        "color": "🟢",
+        "ventana": "Sin ventana critica",
+        "mensaje": "Condicion estable dentro del modelo experimental.",
+        "sirena": False,
+    }
+
+
+def render_sirena_alerta():
+    st.error("SIRENA LOCAL: vigilancia roja experimental. Validar con fuentes oficiales.")
 
 
 def distancia_km(lat1, lon1, lat2, lon2):
@@ -1097,25 +874,7 @@ def _color_mag_inline(mag):
     return [74, 222, 128, 210]
 
 
-def _render_mapa_anillo_fuego(
-    df_sismos, est_lat, est_lon, label, zoom=3, altura=400, df_etiquetas=None, modo_demo=False,
-    mapa_principal=False,
-):
-    mapa_nativo = _usar_mapa_nativo(modo_demo)
-    if mapa_nativo and not mapa_principal:
-        st.info(
-            "En la web publica el mapa interactivo se muestra solo en **Escaneo en vivo** "
-            "(evita errores del navegador). Revisa la tabla de sismos aqui abajo."
-        )
-        vista = df_etiquetas if df_etiquetas is not None and not df_etiquetas.empty else df_sismos
-        if vista is not None and not vista.empty:
-            cols = [c for c in ("Magnitud", "Lugar", "Fecha", "lat", "lon", "Latitud", "Longitud") if c in vista.columns]
-            if cols:
-                st.dataframe(_df_ui(vista[cols].head(15)), use_container_width=True, hide_index=True)
-        return
-    if mapa_nativo:
-        _render_mapa_st_map_nativo(df_sismos, est_lat, est_lon, zoom=zoom)
-        return
+def _render_mapa_anillo_fuego(df_sismos, est_lat, est_lon, label, zoom=3, altura=400, df_etiquetas=None):
     if mapa_tect:
         mapa_tect.render_mapa_tectonico(
             df_sismos=df_sismos, df_etiquetas=df_etiquetas,
@@ -1123,7 +882,6 @@ def _render_mapa_anillo_fuego(
             estacion_label=label, lat_center=est_lat, lon_center=est_lon,
             zoom=zoom, altura=altura, mostrar_anillo=True,
             max_etiquetas=15 if zoom <= 3 else 12,
-            mapa_nativo=False,
         )
         st.caption(mapa_tect.leyenda_mapa_tectonico())
         return
@@ -1198,10 +956,7 @@ def _render_mapa_anillo_fuego(
             "style": {"backgroundColor": "#161b22", "color": "#c9d1d9"},
         },
     )
-    if mapa_tect:
-        mapa_tect.pydeck_chart_compat(deck, altura=altura)
-    else:
-        st.pydeck_chart(deck, height=altura, use_container_width=True)
+    st.pydeck_chart(deck, height=altura, use_container_width=True)
     st.caption("🟠 Cinturón de Fuego · 🔴 M6+ · 🟡 M4.5–5.9 · 🟢 M<4.5 · Tooltip USGS · 🔵 nodo activo")
 
 
@@ -1241,28 +996,14 @@ def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
         nodo_sel = "Filipinas · Mindanao"
     nodo = _NODOS_MUNDO_INLINE[nodo_sel]
     df_g = _fetch_usgs_global_inline()
-    df_m6 = df_g[df_g["Magnitud"] >= 6.0] if not df_g.empty else pd.DataFrame()
-    c1, c2 = st.columns(2)
-    c1.metric("Sismos mundiales USGS M4.5+ (sin Chile)", len(df_g))
-    c2.metric("Eventos mundiales USGS M6+ 14D", len(df_m6))
+    st.metric("Sismos mundiales USGS M4.5+ (sin Chile)", len(df_g))
     st.markdown("#### Terremotos históricos MUNDIALES (Japón, Filipinas, Indonesia…)")
-    st.dataframe(_df_ui(pd.DataFrame(_CATALOGO_MUNDO)), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(_CATALOGO_MUNDO), use_container_width=True, hide_index=True)
     df_nodo = filtrar_sismos_estacion(df_g, nodo["lat"], nodo["lon"], radio_km=400)
-    df_m6_nodo = df_nodo[df_nodo["Magnitud"] >= 6.0] if not df_nodo.empty else pd.DataFrame()
-    st.markdown(f"#### Nodo probable M6+ activo: **{nodo_sel}**")
-    if not df_m6.empty:
-        st.markdown("##### Últimos USGS M6+ globales")
-        st.dataframe(_df_ui(df_m6[["Magnitud", "Lugar", "Fecha"]].head(10)), use_container_width=True, hide_index=True)
-    if not df_m6_nodo.empty:
-        st.info(f"Dentro del radio del nodo hay {len(df_m6_nodo)} evento(s) M6+ recientes.")
-    _render_mapa_anillo_fuego(
-        df_g, nodo["lat"], nodo["lon"], nodo_sel,
-        zoom=2, altura=420, df_etiquetas=df_nodo, modo_demo=modo_demo,
-        mapa_principal=False,
-    )
+    st.markdown(f"#### Mapa — Cinturón de Fuego + USGS · Nodo: **{nodo_sel}**")
+    _render_mapa_anillo_fuego(df_g, nodo["lat"], nodo["lon"], nodo_sel, zoom=2, altura=420, df_etiquetas=df_nodo)
     if modo_demo:
-        st.error("MODO DEMO MUNDO — ejemplo experimental, no alerta oficial.")
-        st.info(ESCENARIO_DEMO_MUNDO["descripcion"])
+        st.error("MODO DEMO activo en laboratorio mundial.")
 
 
 def _render_mundo_lab_ui(admin_activo, ttl_seg, ttl_horas, nodo_sel, forzar, modo_sat, modo_demo, kp):
@@ -1277,45 +1018,6 @@ def _render_mundo_lab_ui(admin_activo, ttl_seg, ttl_horas, nodo_sel, forzar, mod
         _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo)
 
 
-def _pipeline_lab_activo() -> bool:
-    return bool(
-        pipeline_lab and getattr(pipeline_lab, "MODULO_PIPELINE_LAB_ACTIVO", False)
-    )
-
-
-def _render_pipeline_lab_ui(
-    admin_activo,
-    estacion_sel,
-    config,
-    nivel_alerta,
-    puntaje,
-    b_val,
-    mejor_match,
-    total_sismos,
-    df_sismos_local,
-):
-    if _pipeline_lab_activo():
-        pipeline_lab.render_pipeline_lab(
-            admin_activo=admin_activo,
-            estacion_sel=estacion_sel,
-            config=config,
-            ctx_principal={
-                "nivel": nivel_alerta.get("nivel", "VERDE"),
-                "color": nivel_alerta.get("color", "🟢"),
-                "puntaje": puntaje,
-                "b_val": b_val,
-                "mejor_match": mejor_match,
-                "total_sismos": total_sismos,
-            },
-            df_sismos_local=df_sismos_local,
-        )
-    else:
-        st.info(
-            "PIPELINE LAB desactivado. Para habilitar: `MODULO_PIPELINE_LAB_ACTIVO = True` en "
-            "`nazca_pipeline_lab.py` o sube el archivo al servidor."
-        )
-
-
 def filtrar_sismos_estacion(df_sismos, lat, lon, radio_km=RADIO_ESTACION_KM):
     if df_sismos.empty:
         return df_sismos.copy()
@@ -1327,33 +1029,19 @@ def filtrar_sismos_estacion(df_sismos, lat, lon, radio_km=RADIO_ESTACION_KM):
     return df[df["Distancia_km"] <= radio_km].sort_values("Fecha", ascending=False)
 
 
-def generar_sismos_demo_escenario(config, escenario=None):
-    esc = escenario or ESCENARIO_DEMO_CATASTROFICO
-    rng = random.Random(f"demo_{esc['evento_ref']}_{config['id']}")
+def generar_sismos_demo(config, cantidad=85):
+    rng = random.Random(f"demo_{config['lat']}_{config['lon']}")
     ahora = ahora_chile()
     filas = []
-    lugar_demo = f"DEMO · enjambre pre-{esc['evento_ref']} — ejemplo, no USGS real"
-    for i in range(esc["sismos_locales_14d"]):
-        if i < 8:
-            mag = round(rng.uniform(5.6, 6.9), 1)
-        elif i < 22:
-            mag = round(rng.uniform(4.5, 5.5), 1)
-        else:
-            mag = round(rng.uniform(3.8, 4.8), 1)
+    for i in range(cantidad):
+        mag = round(rng.uniform(3.4, 6.8), 1)
+        if i < 6:
+            mag = round(rng.uniform(5.8, 7.4), 1)
         filas.append({
             "Magnitud": mag,
-            "Lugar": lugar_demo,
-            "Latitud": config["lat"] + rng.uniform(-0.75, 0.75),
-            "Longitud": config["lon"] + rng.uniform(-0.75, 0.75),
-            "Fecha": (ahora - timedelta(hours=rng.uniform(0, 14 * 24))).strftime("%Y-%m-%d %H:%M"),
-        })
-    extra = max(0, esc["sismos_chile_14d"] - esc["sismos_locales_14d"])
-    for _ in range(extra):
-        filas.append({
-            "Magnitud": round(rng.uniform(4.0, 5.4), 1),
-            "Lugar": "DEMO · actividad Chile central — ejemplo",
-            "Latitud": config["lat"] + rng.uniform(-2.5, 2.5),
-            "Longitud": config["lon"] + rng.uniform(-2.5, 2.5),
+            "Lugar": "SIMULACIÓN CATASTRÓFICA - enjambre local",
+            "Latitud": config["lat"] + rng.uniform(-1.4, 1.4),
+            "Longitud": config["lon"] + rng.uniform(-1.4, 1.4),
             "Fecha": (ahora - timedelta(hours=rng.uniform(0, 14 * 24))).strftime("%Y-%m-%d %H:%M"),
         })
     return pd.DataFrame(filas).sort_values("Fecha", ascending=False)
@@ -1378,55 +1066,7 @@ def telemetria_estable(estacion, config, total_sismos, ttl_seg, modo_sat, nodo_o
         insar = round(42.0 + min(total_sismos * 4.0, 48.0) + rng.uniform(-1.5, 1.5), 1)
         origen = "SATELITAL LEO" if modo_sat else "SENSOR FÍSICO"
 
-    gnss_info = None
-    atmos_info = None
-    cond_info = None
-    shoa_info = None
-    if not nodo_offline and not modo_sat:
-        if shoa_mod:
-            try:
-                shoa_info = shoa_mod.lectura_marea_nodo(
-                    estacion, config["lat"], config["lon"], ttl_seg=min(ttl_seg, 1800)
-                )
-                if shoa_info:
-                    shoa = shoa_info["shoa_cm"]
-                    origen = shoa_info["origen"]
-            except Exception:
-                shoa_info = None
-        if gnss_mod:
-            try:
-                gnss_info = gnss_mod.lectura_gnss_nodo(
-                    estacion, config["lat"], config["lon"], ttl_seg=ttl_seg
-                )
-                if gnss_info:
-                    insar = gnss_info["insar_pct"]
-                    origen = gnss_info["origen"]
-            except Exception:
-                gnss_info = None
-        if atmos_mod:
-            try:
-                atmos_info = atmos_mod.lectura_atmosfera(
-                    config["lat"],
-                    config["lon"],
-                    baseline_pres=config["baseline_pres"],
-                    codigo_omm=config.get("id"),
-                    ttl_seg=min(ttl_seg, 3600),
-                )
-                if atmos_info:
-                    pres = atmos_info["presion_hpa"]
-                    termico = atmos_info["termico"]
-                    origen = atmos_info["origen"]
-            except Exception:
-                atmos_info = None
-        if cond_mod:
-            try:
-                cond_info = cond_mod.estimar_conductividad(estacion, config, atmos_info)
-                if cond_info and cond_info.get("cond_proxy_fisico"):
-                    cond = cond_info["conductividad_ms_m"]
-            except Exception:
-                cond_info = None
-
-    return shoa, cond, pres, termico, insar, origen, gnss_info, atmos_info, cond_info, shoa_info
+    return shoa, cond, pres, termico, insar, origen
 
 # ==============================================================================
 # MOTOR DE RIESGO (fusión: matriz v7 + compuerta/Z-score/Kp del v3)
@@ -1481,53 +1121,17 @@ def calcular_riesgo_fusion(insar, total_sismos, b_val, cond, shoa, config, kp, t
     return "ESTABLE", "🟢", score, filtro
 
 
-def _tope_riesgo_permitido(gnss_info=None, atmos_info=None, cond_info=None, shoa_info=None):
-    fn = getattr(alertas, "tope_riesgo_permitido", None)
-    if callable(fn):
-        return fn(gnss_info, atmos_info, cond_info, shoa_info)
-    gnss_ok = getattr(alertas, "gnss_es_confiable", lambda _: False)(gnss_info)
-    atmos_ok = getattr(alertas, "atmos_es_real", lambda _: False)(atmos_info)
-    cond_ok = getattr(alertas, "cond_es_proxy_fisico", lambda _: False)(cond_info)
-    if gnss_ok and atmos_ok and cond_ok:
-        return getattr(alertas, "MAX_RIESGO_CON_GNSS_Y_ATMOS", 96.0)
-    if gnss_ok:
-        return getattr(alertas, "MAX_RIESGO_CON_GNSS_CONFIABLE", 92.0)
-    if atmos_ok and cond_ok:
-        return getattr(alertas, "MAX_RIESGO_CON_ATMOS_REAL", 85.0)
-    return getattr(alertas, "MAX_RIESGO_CON_TELEMETRIA_ESTIMADA", 74.0)
-
-
-def aplicar_control_calidad(
-    estado, icono, puntaje, log_filtro, modo_demo=False,
-    gnss_info=None, atmos_info=None, cond_info=None, shoa_info=None,
-):
+def aplicar_control_calidad(estado, icono, puntaje, log_filtro, modo_demo=False):
     if modo_demo:
         return estado, icono, puntaje, f"{log_filtro} // MODO DEMO."
-    tope = _tope_riesgo_permitido(gnss_info, atmos_info, cond_info, shoa_info)
-    if puntaje > tope:
-        if tope >= alertas.MAX_RIESGO_CON_TELEMETRIA_REAL:
-            msg = f"Tope telemetría real ({tope:.0f}%): modelo casi completo."
-        elif tope >= alertas.MAX_RIESGO_CON_GNSS_Y_ATMOS:
-            msg = f"Tope multi-sensor ({tope:.0f}%): SHOA sin mareógrafo cercano."
-        elif alertas.gnss_es_confiable(gnss_info):
-            msg = f"Tope GNSS confiable ({tope:.0f}%): capas parciales estimadas."
-        elif alertas.atmos_es_real(atmos_info):
-            msg = f"Tope atmósfera real ({tope:.0f}%): GNSS/SHOA parciales."
-        else:
-            msg = "Riesgo limitado: telemetría parcialmente estimada."
-        if tope <= alertas.MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:
-            return "VIGILANCIA ALTA HEURÍSTICA", "🟠", tope, f"{log_filtro} // {msg}"
-        return estado, icono, tope, f"{log_filtro} // {msg}"
-    capas = ["USGS/NOAA"]
-    if alertas.gnss_es_confiable(gnss_info):
-        capas.append(f"GNSS {gnss_info['estacion_gnss']}")
-    if alertas.atmos_es_real(atmos_info):
-        capas.append(atmos_info.get("origen", "Atmos"))
-    if alertas.cond_es_proxy_fisico(cond_info):
-        capas.append(f"EM-{cond_info.get('zona_suelo', 'proxy')}")
-    if alertas.shoa_es_real(shoa_info):
-        capas.append(f"SHOA-{shoa_info.get('codigo_ioc', 'IOC')}")
-    return estado, icono, puntaje, f"{log_filtro} // Calidad: {', '.join(capas)}."
+    if puntaje > MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:
+        return (
+            "VIGILANCIA ALTA HEURÍSTICA",
+            "🟠",
+            MAX_RIESGO_CON_TELEMETRIA_ESTIMADA,
+            f"{log_filtro} // Riesgo limitado: InSAR/EM/SHOA/presión/térmico son estimados, no mediciones reales.",
+        )
+    return estado, icono, puntaje, f"{log_filtro} // Calidad: USGS/NOAA real + telemetría física estimada."
 
 
 def similitud(a, r, escala):
@@ -1567,16 +1171,13 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
         b_val = calcular_b_value(df_local)
         bloque, _ = bucket_telemetria(estacion, ttl_seg)
         nodo_offline = modo_sat and random.Random(hash((estacion, bloque, "offline"))).choice([True, False])
-        shoa, cond, presion, termico, insar, origen, gnss_info, atmos_info, cond_info, shoa_info = telemetria_estable(
+        shoa, cond, presion, termico, insar, origen = telemetria_estable(
             estacion, cfg, total_sismos, ttl_seg, modo_sat, nodo_offline
         )
         estado, _, puntaje, _ = calcular_riesgo_fusion(
             insar, total_sismos, b_val, cond, shoa, cfg, kp, termico, presion
         )
-        estado, _, puntaje, _ = aplicar_control_calidad(
-            estado, "🟠", puntaje, "", modo_demo=False,
-            gnss_info=gnss_info, atmos_info=atmos_info, cond_info=cond_info, shoa_info=shoa_info,
-        )
+        estado, _, puntaje, _ = aplicar_control_calidad(estado, "🟠", puntaje, "", modo_demo=False)
         _, patron, match_patron = comparar_con_historico(insar, total_sismos, b_val, cond, shoa)
         z_cond = round((cond - cfg["baseline_cond"]) / cfg["sigma_cond"], 2)
         filas.append({
@@ -1596,14 +1197,6 @@ def construir_calibracion_estaciones(df_sismos, kp, ttl_seg, modo_sat, consultad
             "Térmico": termico,
             "Kp NOAA": kp,
             "Origen telemetría": origen,
-            "GNSS estación": gnss_info["estacion_gnss"] if gnss_info else "—",
-            "GNSS H mm/yr": gnss_info["horiz_mm_anio"] if gnss_info else None,
-            "GNSS V mm/yr": gnss_info["vu_mm_anio"] if gnss_info else None,
-            "Presión hPa": atmos_info["presion_hpa"] if atmos_info else presion,
-            "Atmósfera": atmos_info["origen"] if atmos_info else "estimado",
-            "EM proxy zona": cond_info.get("zona_suelo") if cond_info else "—",
-            "SHOA IOC": shoa_info.get("codigo_ioc") if shoa_info else "—",
-            "SHOA real": "Sí" if alertas.shoa_es_real(shoa_info) else "No",
             "Nodo offline": "Sí" if nodo_offline else "No",
             "USGS actualizado": consultado_usgs,
             "NOAA actualizado": consultado_noaa,
@@ -1632,8 +1225,7 @@ auditable y apta para revisión por profesionales de geotecnia, geología, sismo
 - USGS: catálogo sísmico con ventana móvil de 14 días para Chile. Dato real consultado por API.
 - NOAA Kp: índice geomagnético. Dato real consultado por API y servido por caché operativa.
 - b-value: indicador calculado desde magnitudes USGS locales por estación.
-- GNSS (NGL MIDAS), atmósfera (Open-Meteo), EM proxy y mareógrafo IOC UNESCO: datos reales cuando la API responde.
-- InSAR deriva de GNSS; EM es proxy físico por zona geológica; SHOA es anomalía mareográfica IOC (no SHOA directo).
+- InSAR, EM, SHOA, presión y térmico: telemetría estimada/simulada mientras no existan sensores o APIs reales conectadas.
 
 Última actualización USGS: {consultado_usgs}
 Última actualización NOAA: {consultado_noaa}
@@ -1669,794 +1261,6 @@ Una alerta operativa real requiere validación con mediciones instrumentales ext
 Este sistema es un monitor experimental de señales sísmicas y ambientales. Sus salidas deben entenderse
 como apoyo exploratorio, no como aviso oficial ni reemplazo de organismos técnicos competentes.
 """
-
-
-def _texto_acerca_de(ttl_horas, consultado_usgs, consultado_noaa):
-    return f"""NAZCA CORE MONITOR — ACERCA DE Y FUENTES DE DATOS
-Build: {APP_BUILD}
-Desarrollado por: Sandro Pereira A. · CEO & Developer
-
-Qué es: monitor experimental de vigilancia sísmica y ambiental para la costa de Chile.
-No es alerta oficial ni predicción determinística de terremotos.
-
-FUENTES PRINCIPALES
-- Sismos 14D: USGS FDSN Event API (Chile, M>=2.5)
-- b-value: calculado desde magnitudes USGS en radio {RADIO_ESTACION_KM} km
-- Kp geomagnético: NOAA SWPC
-- Deformación (InSAR%): GNSS NGL MIDAS marco Sudamérica + series tenv3
-- Atmósfera: Open-Meteo (gratis); opcional OpenWeatherMap y MeteoChile
-- EM conductividad: proxy físico Archie por zona geológica + humedad real
-- Marea/SHOA: mareógrafos IOC UNESCO (anomalía residual filtrada)
-- Patrones M7+: catálogo histórico interno de referencia Chile
-
-Caché operativa: {ttl_horas} h · USGS: {consultado_usgs} · NOAA: {consultado_noaa}
-Vigilancia 24/7: scripts/vigilancia_automatica.py (GitHub Actions)
-"""
-
-
-def render_tab_acerca_de(ttl_seg, ttl_horas, consultado_usgs, consultado_noaa):
-    st.markdown("### Acerca de NAZCA CORE MONITOR")
-    st.markdown(
-        "**NAZCA CORE MONITOR** es un sistema experimental de vigilancia sísmica y ambiental "
-        "para el cinturón de subducción de Chile. Combina catálogo sísmico en tiempo casi real, "
-        "deformación GNSS, atmósfera, proxy electromagnético del suelo y mareas costeras "
-        "para estimar un índice heurístico de tensión cortical.\n\n"
-        "**No es una alerta oficial** ni un predictor determinístico de terremotos. "
-        "Sus salidas deben validarse con fuentes institucionales (CSN, SHOA, SERNAGEOMIN) "
-        "y revisión técnica especializada."
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Versión", APP_BUILD)
-    c2.metric("Caché APIs", f"{ttl_horas} h")
-    c3.metric("Último USGS", str(consultado_usgs)[:16])
-    c4.metric("Último NOAA Kp", str(consultado_noaa)[:16])
-
-    st.markdown("#### Dos sistemas independientes en pantalla")
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        st.markdown(
-            "<div style='border:2px solid #d29922;border-radius:12px;padding:14px;"
-            "background:rgba(210,153,34,.08);'>"
-            "<b style='color:#d29922;'>SISTEMA 1 · SEMÁFORO NAZCA</b><br>"
-            "Vigilancia experimental multi-sensor. Colores 🟢🟡🟠🔴 según umbrales del modelo "
-            "(sismos, patrón M7+, GNSS, marea, atmósfera). "
-            "<b>No usa</b> test Poisson ni Omori-Utsu.</div>",
-            unsafe_allow_html=True,
-        )
-    with col_s2:
-        st.markdown(
-            "<div style='border:2px solid #39d4d6;border-radius:12px;padding:14px;"
-            "background:rgba(57,212,214,.08);'>"
-            "<b style='color:#39d4d6;'>SISTEMA 2 · TENDENCIA GR / OMORI</b><br>"
-            "Leyes empíricas estándar: Mc MAXC, b-value MLE Aki, test Poisson (α=0.05), "
-            "ajuste Omori-Utsu. Flecha ↑ rojo = sube · ↓ verde = baja · → azul = estable. "
-            "<b>Independiente</b> del semáforo.</div>",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("#### Fuentes de datos por variable")
-    filas_fuentes = [
-        {
-            "Variable": "Sismos 14D (Chile)",
-            "Fuente": "USGS Earthquake Hazards Program",
-            "Endpoint / referencia": "earthquake.usgs.gov/fdsnws/event/1/query",
-            "Tipo": "REAL",
-            "Caché": f"{ttl_horas} h",
-            "Uso en modelo": "Actividad sísmica regional y filtro local por estación",
-        },
-        {
-            "Variable": "b-value 14D",
-            "Fuente": "Calculado NAZCA desde USGS",
-            "Endpoint / referencia": "Gutenberg-Richter sobre magnitudes locales",
-            "Tipo": "CALCULADO",
-            "Caché": "Derivado de caché USGS",
-            "Uso en modelo": "Firma de ruptura y peso SISMO_BVAL (62%)",
-        },
-        {
-            "Variable": "Tendencia GR / Omori (Sistema 2)",
-            "Fuente": "nazca_forecast_sismico.py",
-            "Endpoint / referencia": "Mc MAXC · b MLE Aki · Poisson α=0.05 · Omori-Utsu MLE",
-            "Tipo": "CALCULADO",
-            "Caché": "Derivado de caché USGS",
-            "Uso en modelo": "Capa aparte del semáforo — indica si la tasa sísmica sube/baja/estable",
-        },
-        {
-            "Variable": "Índice Kp",
-            "Fuente": "NOAA Space Weather Prediction Center",
-            "Endpoint / referencia": "services.swpc.noaa.gov/products/noaa-scales.json",
-            "Tipo": "REAL",
-            "Caché": f"{ttl_horas} h",
-            "Uso en modelo": "Modulador del componente electromagnético",
-        },
-        {
-            "Variable": "InSAR % (deformación)",
-            "Fuente": "Nevada Geodetic Laboratory (NGL) — MIDAS SA",
-            "Endpoint / referencia": "geodesy.unr.edu/velocidades/midas.SA.txt",
-            "Tipo": "REAL (GNSS)",
-            "Caché": f"{ttl_horas} h",
-            "Uso en modelo": "Sustituto InSAR desde velocidades GNSS (peso 18%)",
-        },
-        {
-            "Variable": "Aceleración GNSS 1 año",
-            "Fuente": "NGL series tenv3 (marco SA)",
-            "Endpoint / referencia": "geodesy.unr.edu/gps_timeseries/IGS20/tenv3/SA/",
-            "Tipo": "CALCULADO",
-            "Caché": f"{ttl_horas} h",
-            "Uso en modelo": "Boost si deformación reciente supera baseline MIDAS",
-        },
-        {
-            "Variable": "Presión / temperatura / HR",
-            "Fuente": "Open-Meteo (principal, sin API key)",
-            "Endpoint / referencia": "api.open-meteo.com/v1/forecast",
-            "Tipo": "REAL",
-            "Caché": "≤ 1 h",
-            "Uso en modelo": "Presión atmosférica, índice térmico y entrada al proxy EM",
-        },
-        {
-            "Variable": "Presión (alternativa)",
-            "Fuente": "OpenWeatherMap (opcional)",
-            "Endpoint / referencia": "openweathermap.org — secret OPENWEATHER_API_KEY",
-            "Tipo": "REAL (opcional)",
-            "Caché": "≤ 1 h",
-            "Uso en modelo": "Respaldo si Open-Meteo no responde",
-        },
-        {
-            "Variable": "Presión (alternativa)",
-            "Fuente": "MeteoChile EMA (opcional)",
-            "Endpoint / referencia": "climatologia.meteochile.gob.cl — secrets METEOCHILE_*",
-            "Tipo": "REAL (opcional)",
-            "Caché": "≤ 1 h",
-            "Uso en modelo": "Estación EMA más cercana al nodo",
-        },
-        {
-            "Variable": "EM conductividad (mS/m)",
-            "Fuente": "Proxy físico Archie + zona geológica NAZCA",
-            "Endpoint / referencia": "nazca_conductividad.py — perfiles por costa Chile",
-            "Tipo": "PROXY FÍSICO",
-            "Caché": "En tiempo de cálculo",
-            "Uso en modelo": "Anomalía EM estimada (peso 10%); no es medición in situ",
-        },
-        {
-            "Variable": "SHOA / marea (cm)",
-            "Fuente": "IOC UNESCO Sea Level Monitoring Facility",
-            "Endpoint / referencia": "ioc-sealevelmonitoring.org/service.php?query=data&code=",
-            "Tipo": "REAL",
-            "Caché": "30 min",
-            "Uso en modelo": "Anomalía mareográfica residual (peso 6%)",
-        },
-        {
-            "Variable": "Patrones M7+ históricos",
-            "Fuente": "Catálogo de referencia NAZCA (literatura / CSN)",
-            "Endpoint / referencia": "Maule 2010, Iquique 2014, Illapel 2015, etc.",
-            "Tipo": "REFERENCIA",
-            "Caché": "Estático en código",
-            "Uso en modelo": "Similitud heurística y disparo Telegram experimental",
-        },
-        {
-            "Variable": "Mapa tensión / sismos",
-            "Fuente": "USGS 14D + modelo NAZCA por zona",
-            "Endpoint / referencia": "nazca_mapa_tectonico.py",
-            "Tipo": "CALCULADO",
-            "Caché": f"{ttl_horas} h",
-            "Uso en modelo": "Visualización de acumulación de tensión",
-        },
-        {
-            "Variable": "Alertas Telegram",
-            "Fuente": "Bot Telegram + suscriptores (opcional)",
-            "Endpoint / referencia": "api.telegram.org — secrets TELEGRAM_*",
-            "Tipo": "OPERATIVO",
-            "Caché": "Cooldown 90–120 min",
-            "Uso en modelo": "Notificación experimental a admin y suscriptores",
-        },
-        {
-            "Variable": "Vigilancia 24/7",
-            "Fuente": "GitHub Actions + nazca_vigilancia_core.py",
-            "Endpoint / referencia": "scripts/vigilancia_automatica.py",
-            "Tipo": "OPERATIVO",
-            "Caché": f"{ttl_horas} h",
-            "Uso en modelo": "Escaneo automático cada 6 h sin Streamlit abierto",
-        },
-    ]
-    st.dataframe(_df_ui(pd.DataFrame(filas_fuentes)), use_container_width=True, hide_index=True)
-
-    st.markdown("#### Mapeo nodos CORE → sensores reales")
-    filas_nodos = []
-    gnss_pref = getattr(gnss_mod, "NODOS_GNSS_PREFERIDOS", {}) if gnss_mod else {}
-    ioc_map = getattr(shoa_mod, "NODOS_IOC", {}) if shoa_mod else {}
-    for nombre, cfg in ESTACIONES_CONFIG.items():
-        filas_nodos.append({
-            "Nodo NAZCA": nombre,
-            "Código OMM": cfg.get("id", "—"),
-            "GNSS preferida": ", ".join(gnss_pref.get(nombre, [])) or "cercana automática",
-            "Mareógrafo IOC": (ioc_map.get(nombre, "—") or "—").upper(),
-            "Lat/Lon nodo": f"{cfg['lat']:.2f}, {cfg['lon']:.2f}",
-        })
-    st.dataframe(_df_ui(pd.DataFrame(filas_nodos)), use_container_width=True, hide_index=True)
-
-    with st.expander("Detalle mareógrafos IOC por nodo"):
-        st.markdown(
-            "| Nodo | Código IOC | Ubicación IOC |\n"
-            "|------|------------|---------------|\n"
-            "| Arica / Iquique | ARIC | Arica |\n"
-            "| Antofagasta | ANTO | Antofagasta |\n"
-            "| Coquimbo | COQU | Coquimbo |\n"
-            "| Valparaíso / San Antonio | SANO | San Antonio |\n"
-            "| Concepción / Lebu | LEBU | Lebu |\n"
-            "| Valdivia / Puerto Montt | PMON | Puerto Montt |\n"
-            "| Pto. Aysén / Taitao | CSTR | Castro (referencia patagónica) |\n\n"
-            "La anomalía SHOA se calcula como residual filtrado (media móvil de marea + umbral sigma), "
-            "no como nivel absoluto del mar. No reemplaza el servicio oficial del SHOA."
-        )
-
-    with st.expander("Detalle GNSS e índice InSAR"):
-        st.markdown(
-            "- **Velocidades:** archivo MIDAS del marco de referencia Sudamérica (SA), Universidad de Nevada Reno.\n"
-            "- **Catálogo Chile:** estaciones dentro de límites nacionales + semillas IGS (`gnss_catalogo_chile.json`).\n"
-            "- **Confiable:** estación GNSS a menos de **100 km** del nodo.\n"
-            "- **InSAR %:** mapeo heurístico de velocidades horizontales/verticales y subsidencia hacia la fosa.\n"
-            "- **Aceleración:** pendiente de la serie tenv3 en el último año vs. velocidad MIDAS de largo plazo."
-        )
-
-    with st.expander("Detalle atmósfera y conductividad (EM)"):
-        st.markdown(
-            "- **Open-Meteo** es la fuente por defecto (gratuita, sin registro).\n"
-            "- **OpenWeatherMap** y **MeteoChile** se activan solo si existen keys en `.streamlit/secrets.toml`.\n"
-            "- **EM:** proxy tipo Archie calibrado por zona (`árido norte`, `costa central`, `sur húmedo`, etc.) "
-            "usando humedad relativa y precipitación reales. **No** es una medición geofísica de campo.\n"
-            "- Zonas inspiradas en contexto geológico costero/subducción (referencia IDE/SERNAGEOMIN)."
-        )
-
-    st.markdown("#### Topes de riesgo según calidad de telemetría")
-    df_topes = pd.DataFrame([
-        {
-            "Condición": "Telemetría parcialmente estimada",
-            "Tope máx.": f"{getattr(alertas, 'MAX_RIESGO_CON_TELEMETRIA_ESTIMADA', 74):.0f}%",
-            "Descripción": "Sin GNSS confiable ni paquete atmos+EM completo",
-        },
-        {
-            "Condición": "Atmósfera real + EM proxy físico",
-            "Tope máx.": f"{getattr(alertas, 'MAX_RIESGO_CON_ATMOS_REAL', 85):.0f}%",
-            "Descripción": "Open-Meteo (u otra fuente real) + proxy Archie activo",
-        },
-        {
-            "Condición": "GNSS confiable (< 100 km)",
-            "Tope máx.": f"{getattr(alertas, 'MAX_RIESGO_CON_GNSS_CONFIABLE', 92):.0f}%",
-            "Descripción": "Deformación NGL cercana al nodo",
-        },
-        {
-            "Condición": "GNSS + Atmos + EM proxy",
-            "Tope máx.": f"{getattr(alertas, 'MAX_RIESGO_CON_GNSS_Y_ATMOS', 96):.0f}%",
-            "Descripción": "Tres capas reales/proxy físico sin mareógrafo cercano",
-        },
-        {
-            "Condición": "Stack completo (+ SHOA IOC < 120 km)",
-            "Tope máx.": f"{getattr(alertas, 'MAX_RIESGO_CON_TELEMETRIA_REAL', 98):.0f}%",
-            "Descripción": "GNSS + atmósfera + EM + mareógrafo IOC confiable",
-        },
-    ])
-    st.dataframe(_df_ui(df_topes), use_container_width=True, hide_index=True)
-
-    st.markdown("#### Pesos del modelo de fusión")
-    st.dataframe(
-        _df_ui(pd.DataFrame([
-            {"Componente": k, "Peso": f"{v * 100:.0f}%", "Descripción": {
-                "SISMO_BVAL": "Actividad sísmica y b-value",
-                "INSAR": "Deformación GNSS → índice InSAR",
-                "CONDUCT": "Proxy electromagnético del suelo",
-                "SHOA": "Anomalía mareográfica IOC",
-                "ATMOS": "Presión y componente térmico",
-            }.get(k, "")}
-            for k, v in PESOS.items()
-        ])),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.markdown("#### APIs opcionales (secrets.toml)")
-    st.code(
-        "# .streamlit/secrets.toml — todas opcionales salvo Telegram si quieres alertas\n"
-        "OPENWEATHER_API_KEY = \"...\"          # respaldo atmósfera\n"
-        "METEOCHILE_USUARIO = \"...\"           # EMA MeteoChile\n"
-        "METEOCHILE_TOKEN = \"...\"\n"
-        "TELEGRAM_TOKEN = \"...\"               # alertas experimentales\n"
-        "TELEGRAM_CHAT_ID = \"...\"\n"
-        "ADMIN_PIN = \"...\"                    # herramientas admin en sidebar\n",
-        language="toml",
-    )
-
-    st.warning(
-        "**Limitación legal y técnica:** NAZCA CORE MONITOR es un proyecto experimental privado. "
-        "No sustituye al Centro Sismológico Nacional (CSN), al Servicio Hidrográfico y Oceanográfico "
-        "de la Armada (SHOA), ni a ningún sistema de alerta temprana oficial. "
-        "Ante cualquier evento real, siga las instrucciones de autoridades competentes."
-    )
-
-    texto = _texto_acerca_de(ttl_horas, consultado_usgs, consultado_noaa)
-    st.download_button(
-        "Descargar Acerca de (TXT)",
-        texto.encode("utf-8"),
-        "nazca_acerca_de_fuentes.txt",
-        "text/plain",
-        use_container_width=True,
-    )
-
-
-def nombre_zona_simple(estacion_sel: str) -> str:
-    base = estacion_sel.split("(")[0].strip()
-    return base.replace(" / ", " y ")
-
-
-def accion_sugerida_simple(nivel: str) -> str:
-    return {
-        "VERDE": "Ninguna medida especial. Para alertas oficiales, consulte el CSN (sismologia.cl).",
-        "AMARILLO": "Mantener observación. Revise esta página cada 6–12 horas y las fuentes oficiales.",
-        "NARANJO": "Informe al equipo de monitoreo. Contraste con CSN/SHOA antes de tomar decisiones operativas.",
-        "ROJO": "Escale a responsable técnico de inmediato. No difunda como alerta pública sin validación experta.",
-    }.get(nivel, "Revise con su equipo técnico.")
-
-
-def etiqueta_actividad_sismica(total_sismos: int) -> str:
-    if total_sismos >= 12:
-        return "Alta"
-    if total_sismos >= 5:
-        return "Moderada"
-    if total_sismos >= 2:
-        return "Baja"
-    return "Muy tranquila"
-
-
-def etiqueta_patron_historico(mejor_match: float) -> str:
-    if mejor_match >= 78:
-        return "Muy parecida a un gran terremoto"
-    if mejor_match >= 65:
-        return "Algo parecida a un gran terremoto"
-    if mejor_match >= 50:
-        return "Leve similitud"
-    return "Sin similitud notable"
-
-
-def riesgo_estacion_local(df_calibracion: pd.DataFrame, estacion_sel: str) -> float | None:
-    if df_calibracion is None or df_calibracion.empty or "Estación" not in df_calibracion.columns:
-        return None
-    fila = df_calibracion[df_calibracion["Estación"] == estacion_sel]
-    if fila.empty:
-        return None
-    try:
-        return float(fila.iloc[0]["Riesgo %"])
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-def etiqueta_tension_zona_local(riesgo_pct: float | None) -> str:
-    if riesgo_pct is None:
-        return "Sin dato local"
-    if riesgo_pct >= 75:
-        return "Alta en esta zona"
-    if riesgo_pct >= 55:
-        return "Moderada en esta zona"
-    if riesgo_pct >= 40:
-        return "Baja en esta zona"
-    return "Tranquila en esta zona"
-
-
-def motivos_semaforo_simple(
-    nivel_alerta: dict,
-    puntaje: float,
-    mejor_match: float,
-    mejor_ev: str,
-    total_sismos: int,
-    b_val: float,
-    insar: float,
-    riesgo_local: float | None,
-    zona: str,
-) -> list[str]:
-    nivel = nivel_alerta.get("nivel", "VERDE")
-    if nivel == "VERDE":
-        return ["Ningún indicador supera los umbrales de observación reforzada."]
-
-    motivos: list[str] = []
-    if total_sismos >= 12:
-        motivos.append(f"**{total_sismos}** temblores en 14 días cerca de esta zona (actividad alta).")
-    elif total_sismos >= 5:
-        motivos.append(f"**{total_sismos}** temblores en 14 días (actividad moderada).")
-    if mejor_match >= 65:
-        motivos.append(
-            f"Similitud **{mejor_match:.0f}%** con **{mejor_ev}** (solo referencia histórica)."
-        )
-    elif mejor_match >= 50:
-        motivos.append(f"Cierta similitud (**{mejor_match:.0f}%**) con el patrón de **{mejor_ev}**.")
-    if puntaje >= 55:
-        motivos.append(f"Índice de vigilancia del modelo en **{puntaje:.0f}%**.")
-    if b_val < 0.68 and total_sismos >= 8:
-        motivos.append(f"Enjambre sísmico **inusual** (b-value {b_val}).")
-    if insar >= 55:
-        motivos.append(f"Movimiento lento del suelo **elevado** en {zona} (índice {insar:.0f}%).")
-    if riesgo_local is not None and riesgo_local >= 55:
-        motivos.append(
-            f"Índice de vigilancia **local** en **{zona}**: **{riesgo_local:.0f}%**."
-        )
-    if nivel_alerta.get("origen") == "ruptura" and b_val <= 0.68:
-        motivos.append("El modelo detecta una posible **firma de enjambre** pre-ruptura.")
-    if not motivos:
-        motivos.append(nivel_alerta.get("mensaje", "El modelo sugiere seguimiento reforzado."))
-    return motivos
-
-
-ESTILO_SEMAFORO_NIVEL = {
-    "VERDE": {
-        "color": "#3fb950",
-        "bg": "rgba(63, 185, 80, 0.10)",
-        "border": "#3fb950",
-        "icono": "🟢",
-    },
-    "AMARILLO": {
-        "color": "#d29922",
-        "bg": "rgba(210, 153, 34, 0.12)",
-        "border": "#d29922",
-        "icono": "🟡",
-    },
-    "NARANJO": {
-        "color": "#db6d28",
-        "bg": "rgba(219, 109, 40, 0.12)",
-        "border": "#db6d28",
-        "icono": "🟠",
-    },
-    "ROJO": {
-        "color": "#f85149",
-        "bg": "rgba(248, 81, 73, 0.12)",
-        "border": "#f85149",
-        "icono": "🔴",
-    },
-}
-
-ESTILO_PANEL_GR = {
-    "color": "#39d4d6",
-    "bg": "rgba(57, 212, 214, 0.08)",
-    "border": "#39d4d6",
-}
-
-
-def _cabecera_panel_sistema(
-    numero: str,
-    nombre: str,
-    descripcion: str,
-    estilo: dict,
-    clase_extra: str = "",
-) -> None:
-    color = estilo.get("border", estilo.get("color", "#58a6ff"))
-    bg = estilo.get("bg", "rgba(88, 166, 255, 0.08)")
-    st.markdown(
-        f"""
-        <div class="nazca-sistema-panel {clase_extra}" style="border-color:{color};background:{bg};">
-            <div class="nazca-sistema-header">
-                <span class="nazca-sistema-badge" style="border-color:{color};color:{color};">
-                    SISTEMA {numero} · {nombre}
-                </span>
-                <span class="nazca-sistema-sub">{descripcion}</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _badge_veredicto_tendencia(estilo: dict, texto: str, detalle: str = "") -> None:
-    color = estilo.get("color", "#58a6ff")
-    bg = estilo.get("bg", "rgba(88, 166, 255, 0.14)")
-    icono = estilo.get("icono", "→")
-    detalle_html = f'<span style="font-size:.82rem;font-weight:400;color:#8b949e;margin-left:8px;">{detalle}</span>' if detalle else ""
-    st.markdown(
-        f"""
-        <div class="nazca-veredicto-badge" style="border-color:{color};background:{bg};color:{color};">
-            <span class="nazca-veredicto-icono">{icono}</span>
-            <span>{texto}</span>
-            {detalle_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_panel_tendencia_gr(fc: dict, zona: str, tecnico: bool = False) -> None:
-    """Sistema 2 — tendencia científica GR / Omori-Utsu (independiente del semáforo)."""
-    if not fc:
-        return
-    _cabecera_panel_sistema(
-        "2",
-        "TENDENCIA GR / OMORI",
-        "Leyes empíricas estándar (Gutenberg-Richter + Omori-Utsu) · "
-        f"Catálogo USGS 14D de **{zona}** · No predice fecha ni magnitud de gran sismo",
-        ESTILO_PANEL_GR,
-        "nazca-panel-gr",
-    )
-
-    est = fc.get("estilo") or ESTILO_PANEL_GR
-    t = fc.get("tendencia") or {}
-    test = t.get("test") or {}
-    p_txt = f"p={test.get('p_value', '—')}" if test else ""
-    _badge_veredicto_tendencia(
-        est,
-        f"Tendencia: {est.get('etiqueta_corta', '—')}",
-        f"Test Poisson {p_txt} · α=0.05",
-    )
-
-    if tecnico:
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Veredicto GR", f"{fc.get('flecha', '·')} {t.get('direccion', '—')}")
-        c2.metric("b-value (MLE Aki)", f"{fc.get('b_value', 0):.3f}" if fc.get("confiable") else "—")
-        c3.metric("Mc (MAXC)", f"{fc.get('mc', 0):.2f}" if fc.get("confiable") else "—")
-        c4.metric("a-value GR", f"{fc.get('a_value', 0):.3f}" if fc.get("confiable") else "—")
-        c5.metric("λ(M≥Mc) / día", fc.get("lambda_mc_dia") if fc.get("confiable") else "—")
-
-        c6, c7, c8, c9 = st.columns(4)
-        c6.metric("7d reciente", t.get("reciente", 0))
-        c7.metric("7d anterior", t.get("anterior", 0))
-        ratio = test.get("ratio")
-        c8.metric("Ratio tasas", f"{ratio:.2f}" if ratio is not None else "—")
-        c9.metric("Esperados M≥4 (7d)", f"~{fc['esperado_m4_7d']:.2f}" if fc.get("esperado_m4_7d") is not None else "—")
-
-        om = fc.get("omori") or {}
-        if om.get("aplica"):
-            aj = om.get("ajuste") or {}
-            st.caption(
-                f"**Omori-Utsu:** {om.get('etiqueta', '').replace('**', '')} · "
-                f"Principal M{om.get('evento_principal', '?')} ({om.get('fecha_principal', '')})"
-            )
-            if aj:
-                st.caption(
-                    f"Parámetros ajustados: K={aj.get('K', '—')} · c={aj.get('c', '—')} d · "
-                    f"p={aj.get('p', '—')} · réplicas={aj.get('n_replicas', '—')}"
-                )
-        st.caption(f"Método: {fc.get('metodo', 'GR/Omori')} · eventos={fc.get('n_eventos', 0)} · "
-                   f"duración catálogo={fc.get('dias_catalogo', '—')} d")
-    else:
-        f1, f2, f3 = st.columns(3)
-        f1.metric(
-            "Tasa 7 días (Poisson)",
-            f"{fc.get('flecha', '·')} {t.get('reciente', 0)} vs {t.get('anterior', 0)} prev.",
-            delta=f"{t.get('delta_pct', 0):+.0f}% vs semana previa" if t.get("anterior") else None,
-        )
-        if fc.get("confiable"):
-            f2.metric("b-value (GR)", f"{fc['b_value']:.2f}", help="MLE tipo Aki con Mc MAXC")
-            esp4 = fc.get("esperado_m4_7d")
-            f3.metric(
-                "Esperados M≥4 (7 días)",
-                f"~{esp4:.1f}" if esp4 is not None else "—",
-                help="Poisson desde ley GR calibrada al catálogo",
-            )
-        else:
-            min_ev = getattr(forecast_mod, "MIN_EVENTOS_GR", 10) if forecast_mod else 10
-            f2.metric("b-value (GR)", "—", help=f"Requiere ≥{min_ev} sismos locales")
-            f3.metric("Esperados M≥4", "—")
-
-    st.info(fc.get("sintesis", ""))
-    om = fc.get("omori") or {}
-    if om.get("aplica") and not tecnico:
-        est_o = om.get("estilo") or est
-        st.markdown(
-            f"<span style='color:{est_o.get('color', '#8b949e')};font-weight:600;'>"
-            f"Enjambre {est_o.get('icono', '')} {om.get('etiqueta', '').replace('**', '')}</span>",
-            unsafe_allow_html=True,
-        )
-    elif om.get("etiqueta") and not om.get("aplica"):
-        st.caption(om["etiqueta"])
-
-
-def frase_estado_simple(zona: str, nivel: str, total_sismos: int) -> str:
-    if nivel == "VERDE":
-        return (
-            f"La costa de **{zona}** se ve **tranquila** en el monitoreo experimental. "
-            f"Actividad sísmica reciente: **{total_sismos}** temblores cerca en 14 días."
-        )
-    if nivel == "AMARILLO":
-        return (
-            f"Hay **actividad a observar** en **{zona}**. "
-            f"Se registraron **{total_sismos}** temblores cercanos en las últimas 2 semanas."
-        )
-    if nivel == "NARANJO":
-        return (
-            f"**Vigilancia reforzada** en **{zona}**. "
-            f"El modelo detecta señales que merecen seguimiento técnico (**{total_sismos}** sismos locales 14D)."
-        )
-    return (
-        f"**Atención máxima experimental** en **{zona}**. "
-        f"Requiere revisión técnica urgente (**{total_sismos}** sismos locales 14D)."
-    )
-
-
-def render_vista_simple(
-    estacion_sel,
-    nivel_alerta,
-    puntaje,
-    total_sismos,
-    total_sismos_chile,
-    mejor_ev,
-    mejor_match,
-    estado,
-    b_val,
-    insar,
-    shoa,
-    cond,
-    df_sismos,
-    df_sismos_local,
-    df_calibracion,
-    config,
-    consultado_usgs,
-    modo_demo,
-    mapa_tect,
-    nodo_offline,
-    admin_activo=False,
-    telegram_activo=False,
-    sirena_activa=False,
-    telegram_estado="",
-):
-    zona = nombre_zona_simple(estacion_sel)
-    nivel = nivel_alerta.get("nivel", "VERDE")
-    color = nivel_alerta.get("color", "🟢")
-    est_sem = ESTILO_SEMAFORO_NIVEL.get(nivel, ESTILO_SEMAFORO_NIVEL["VERDE"])
-
-    if modo_demo:
-        st.error("Modo demostración activo — los valores son un ejemplo, no un evento real.")
-
-    _cabecera_panel_sistema(
-        "1",
-        "SEMÁFORO NAZCA",
-        "Vigilancia experimental multi-sensor (sismos, patrón M7+, GNSS, marea, atmósfera) · "
-        "Resume **qué tan tensa** está la zona",
-        est_sem,
-        "nazca-panel-semaforo",
-    )
-
-    st.markdown(
-        f"<h2 style='color:{est_sem['color']};margin-top:0;'>{color} {zona}</h2>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(frase_estado_simple(zona, nivel, total_sismos))
-
-    if mejor_match >= 50:
-        st.info(
-            f"El patrón actual tiene **{mejor_match:.0f}%** de similitud con **{mejor_ev}** "
-            "(terremoto grande del pasado). **No es una predicción**, solo una referencia histórica."
-        )
-
-    st.warning(
-        "Monitor **experimental** de apoyo al monitoreo. **No** reemplaza alertas del CSN, SHOA "
-        "ni de autoridades. No indica cuándo ni dónde ocurrirá un próximo terremoto."
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "Nivel de vigilancia",
-        f"{color} {nivel}",
-        help="Verde=tranquilo · Amarillo=observar · Naranjo=reforzar · Rojo=máxima atención experimental",
-    )
-    c2.metric(
-        "Temblores cerca (14 días)",
-        total_sismos,
-        help=f"Dentro de {RADIO_ESTACION_KM} km del nodo {zona}",
-    )
-    c3.metric(
-        "Índice de vigilancia",
-        f"{puntaje:.0f}%",
-        help="Resumen interno del modelo NAZCA. No es probabilidad de terremoto.",
-    )
-    c4.metric(
-        "Ventana sugerida",
-        nivel_alerta.get("ventana", "—"),
-        help="Horizonte de observación sugerido por el modelo",
-    )
-
-    st.markdown(f"**Qué hacer ahora:** {accion_sugerida_simple(nivel)}")
-
-    riesgo_local = riesgo_estacion_local(df_calibracion, estacion_sel)
-
-    motivos = motivos_semaforo_simple(
-        nivel_alerta, puntaje, mejor_match, mejor_ev, total_sismos, b_val, insar, riesgo_local, zona
-    )
-    if nivel != "VERDE":
-        st.markdown("**¿Por qué este semáforo?**")
-        for m in motivos:
-            st.markdown(f"- {m}")
-        sensores_calmados = insar < 55 and shoa < 5 and b_val >= 0.75
-        if sensores_calmados:
-            st.caption(
-                "Suelo, marea y enjambre se ven **normales** en esta zona; "
-                "el color del semáforo sube por **actividad sísmica local** o **patrón histórico** "
-                f"en **{zona}** (no por otras costas)."
-            )
-
-    st.caption(f"Estado interno del modelo: {estado} · Chile 14D: {total_sismos_chile} sismos · USGS: {consultado_usgs}")
-
-    if nodo_offline:
-        st.warning("Señal de red limitada — lectura estimada por vecindad.")
-
-    fc = forecast_mod.resumen_forecast_sismico(df_sismos_local) if forecast_mod else None
-    if fc:
-        render_panel_tendencia_gr(fc, zona, tecnico=False)
-
-    st.markdown("#### Mapa de actividad")
-    st.caption("Puntos = temblores recientes. El círculo azul marca la zona que está mirando.")
-    df_tension_tabla = pd.DataFrame()
-    if mapa_tect:
-        df_tension_tabla, _ = mapa_tect.render_mapa_tension(
-            df_sismos=df_sismos,
-            df_calibracion=df_calibracion,
-            estaciones_config=ESTACIONES_CONFIG,
-            estacion_lat=config["lat"],
-            estacion_lon=config["lon"],
-            estacion_label=estacion_sel,
-            zoom=4,
-            altura=380,
-            mapa_nativo=_usar_mapa_nativo(modo_demo),
-        )
-    else:
-        _render_mapa_anillo_fuego(
-            df_sismos_local, config["lat"], config["lon"], estacion_sel,
-            zoom=4, altura=380, modo_demo=modo_demo, mapa_principal=True,
-        )
-
-    col_sismos, col_resumen = st.columns([1.4, 1])
-    with col_sismos:
-        st.markdown("#### Temblores recientes cerca de esta zona")
-        cols_tabla = ["Magnitud", "Lugar", "Fecha"]
-        if not df_sismos_local.empty and "Distancia_km" in df_sismos_local.columns:
-            df_show = df_sismos_local[cols_tabla + ["Distancia_km"]].copy()
-            df_show = df_show.rename(columns={"Distancia_km": "Distancia km"})
-        else:
-            df_show = df_sismos_local[cols_tabla] if not df_sismos_local.empty else pd.DataFrame(columns=cols_tabla)
-        st.dataframe(_df_ui(df_show), height=220, use_container_width=True)
-
-    with col_resumen:
-        st.markdown("#### Lectura rápida (solo esta zona)")
-        lectura = [
-            ("Sistema 1 · Semáforo NAZCA", f"{color} {nivel}"),
-            ("Sistema 2 · Tendencia GR/Omori", (
-                f"{fc['estilo']['icono']} {fc['estilo']['etiqueta_corta']}"
-                if fc and fc.get("estilo") else "Sin dato"
-            )),
-            ("Temblores cercanos (14 días)", etiqueta_actividad_sismica(total_sismos)),
-            ("Comparación con gran terremoto", etiqueta_patron_historico(mejor_match)),
-            ("Tensión en esta zona", etiqueta_tension_zona_local(riesgo_local)),
-            ("Movimiento lento del suelo", "Normal" if insar < 55 else ("Elevado" if insar < 75 else "Alto")),
-            ("Marea / costa", "Normal" if shoa < 5 else ("Alterada" if shoa < 12 else "Muy alterada")),
-            ("Actividad de enjambre", "Típica" if b_val >= 0.75 else ("Inusual" if b_val >= 0.68 else "Muy inusual")),
-        ]
-        for etiqueta, valor in lectura:
-            st.markdown(f"- **{etiqueta}:** {valor}")
-
-    if auditoria_mod:
-        resumen_aud = auditoria_mod.resumen_auditoria_estacion(estacion_sel)
-        if resumen_aud["total"] > 0:
-            with st.expander("Historial de alertas de esta zona (auditoría)"):
-                a1, a2, a3, a4 = st.columns(4)
-                a1.metric("Alertas registradas", resumen_aud["total"])
-                a2.metric("Pendientes", resumen_aud["pendiente"])
-                a3.metric("Con evento M5+", resumen_aud["acierto"])
-                a4.metric("Sin evento (30d)", resumen_aud["falso_positivo"])
-                st.caption(
-                    "Criterio: tras alerta amarilla/naranja/roja, se revisa si hubo sismo **M≥5** "
-                    f"dentro de **{auditoria_mod.VENTANA_EVAL_DIAS} días** y **{auditoria_mod.RADIO_EVAL_KM} km**."
-                )
-                df_aud = auditoria_mod.tabla_auditoria_estacion(estacion_sel)
-                if not df_aud.empty:
-                    st.dataframe(_df_ui(df_aud), use_container_width=True, hide_index=True)
-
-    with st.expander("Ver números técnicos (opcional)"):
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("Deformación (índice)", f"{insar:.1f}%")
-        t2.metric("b-value", f"{b_val}")
-        t3.metric("Similitud M7+", f"{mejor_match:.1f}%")
-        t4.metric("Marea residual", f"{shoa:.1f} cm")
-        st.caption(f"Conductividad proxy: {cond:.2f} mS/m · Patrón más parecido: {mejor_ev}")
-
-    render_panel_demo_telegram(
-        estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-        mejor_ev, mejor_match, consultado_usgs, nivel_alerta,
-        admin_activo, telegram_activo, modo_demo, sirena_activa,
-        telegram_estado=telegram_estado, key_prefix="simple",
-    )
-
 
 # ==============================================================================
 # PDF
@@ -2600,14 +1404,6 @@ def generar_pdf(
 # SIDEBAR
 # ==============================================================================
 st.sidebar.markdown("### CORE NETWORK")
-modo_simple = st.sidebar.radio(
-    "Vista",
-    ["Simple", "Técnica"],
-    index=0,
-    horizontal=True,
-    help="Simple: resumen para decisiones. Técnica: monitoreo completo con todas las variables.",
-) == "Simple"
-
 intervalo = st.sidebar.selectbox(
     "Intervalo caché APIs (USGS / NOAA)",
     list(INTERVALOS_API.keys()),
@@ -2616,35 +1412,17 @@ intervalo = st.sidebar.selectbox(
 ttl_seg = INTERVALOS_API[intervalo]
 ttl_horas = max(1, ttl_seg // 3600)
 
-if modo_simple:
-    st.sidebar.caption(f"Datos sísmicos se actualizan cada **{ttl_horas} h** como máximo.")
-else:
-    st.sidebar.caption(
-        f"Las APIs se consultan como máximo cada **{ttl_horas} h**. "
-        "Entre consultas se sirven datos desde `.nazca_cache/`."
-    )
+st.sidebar.caption(
+    f"Las APIs se consultan como máximo cada **{ttl_horas} h**. "
+    "Entre consultas se sirven datos desde `.nazca_cache/`."
+)
 
 st.sidebar.markdown("---")
 admin_pin = st.sidebar.text_input("PIN admin", type="password", placeholder="Opcional")
 admin_esperado = obtener_secret("ADMIN_PIN")
-if admin_esperado and admin_pin == admin_esperado:
-    st.session_state["admin_autenticado"] = True
-admin_activo = bool(
-    admin_esperado
-    and (
-        st.session_state.get("admin_autenticado", False)
-        or admin_pin == admin_esperado
-    )
-)
-if not admin_esperado:
-    st.sidebar.warning(
-        "ADMIN_PIN no configurado. Agrégalo en `.streamlit/secrets.toml` y reinicia Streamlit."
-    )
-elif admin_activo:
+admin_activo = bool(admin_esperado and admin_pin == admin_esperado)
+if admin_activo:
     st.sidebar.success("Modo admin activo.")
-    if st.sidebar.button("Cerrar sesión admin", use_container_width=True):
-        st.session_state.pop("admin_autenticado", None)
-        st.rerun()
     _ver_mundo = getattr(mundo_lab, "MUNDO_LAB_VERSION", None) if mundo_lab else None
     st.sidebar.caption(
         f"Build app: **{APP_BUILD}** · MUNDO: **{_ver_mundo or 'NO'}** · "
@@ -2681,47 +1459,22 @@ else:
 
 st.sidebar.markdown("---")
 if admin_activo:
-    modo_demo_prev = st.session_state.get("modo_demo_activo", False)
-    modo_demo = st.sidebar.checkbox(
-        "Simulación Catastrófica",
-        value=modo_demo_prev,
-        key="chk_modo_demo",
-        help="Fija Illapel 2015 (Chile) y Mindanao (MUNDO) como ejemplo con umbrales de alerta. No es predicción.",
-    )
-    if modo_demo != modo_demo_prev:
-        st.session_state["modo_demo_activo"] = modo_demo
-        for _k in ("ultima_sirena", "ultimo_log", "ultima_evidencia", "pdf"):
-            st.session_state.pop(_k, None)
+    modo_demo = st.sidebar.checkbox("Simulación Catastrófica", value=False)
     modo_sat = st.sidebar.toggle("Colapso red terrestre (satelital)", value=False)
     sirena_activa = st.sidebar.toggle("Sirena local en alerta roja", value=True)
 else:
     modo_demo = False
-    st.session_state["modo_demo_activo"] = False
     modo_sat = False
     sirena_activa = False
 canal = "SATELITAL LEO" if modo_sat else "TERRESTRE"
 
 st.sidebar.markdown("---")
-if admin_activo:
-    if "telegram_vigilancia_activa" not in st.session_state:
-        st.session_state["telegram_vigilancia_activa"] = False
-    telegram_activo = st.sidebar.toggle(
-        "Telegram vigilancia Chile",
-        key="telegram_vigilancia_activa",
-    )
-else:
-    telegram_activo = False
+telegram_activo = st.sidebar.toggle("Telegram vigilancia M7+", value=False) if admin_activo else False
 if telegram_activo:
     if telegram_configurado():
         st.sidebar.success("Telegram configurado.")
-        st.sidebar.caption(
-            f"Disparo: patron M7+ (≥{UMBRAL_NOTIFICACION_TELEGRAM}% / match ≥{UMBRAL_MATCH_M7_TELEGRAM}%) "
-            f"o firma ruptura (b≤{alertas.UMBRAL_B_RUPTURA}, ≥{alertas.MIN_SISMOS_RUPTURA} sismos)."
-        )
     else:
         st.sidebar.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en secrets.")
-if admin_activo:
-    st.sidebar.caption("Vigilancia 24/7: GitHub Actions cada 6 h (scripts/vigilancia_automatica.py).")
 
 _mundo_sidebar = bool(mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo)
 if _mundo_sidebar:
@@ -2762,24 +1515,6 @@ else:
     if _mundo_sidebar:
         st.sidebar.caption("Pestaña MUNDO (LAB) usa el último nodo global guardado.")
 
-if modo_demo:
-    estacion_sel = ESCENARIO_DEMO_CATASTROFICO["estacion"]
-    config = ESTACIONES_CONFIG[estacion_sel]
-    nodo_demo = ESCENARIO_DEMO_MUNDO["nodo"]
-    if nodo_demo in _nodos_mundo:
-        nodo_mundo_sel = nodo_demo
-        st.session_state["nodo_mundo_sel"] = nodo_demo
-    st.sidebar.warning(
-        f"Demo: **{estacion_sel}** · firma **{ESCENARIO_DEMO_CATASTROFICO['evento_ref']}** "
-        f"({ESCENARIO_DEMO_CATASTROFICO['mag_ref']})"
-    )
-    if not telegram_activo:
-        st.sidebar.caption(
-            "Para probar Telegram en la demo: activa **Telegram vigilancia Chile** abajo."
-        )
-    if nodo_demo in _nodos_mundo:
-        st.sidebar.caption(f"MUNDO LAB demo: **{nodo_demo}** · ref. {ESCENARIO_DEMO_MUNDO['evento_ref']}")
-
 st.sidebar.markdown("---")
 bitacora = leer_bitacora_bytes()
 if bitacora and admin_activo:
@@ -2794,25 +1529,12 @@ api_nueva = False
 consultado_usgs = consultado_noaa = "—"
 
 if modo_demo:
-    esc = ESCENARIO_DEMO_CATASTROFICO
-    df_sismos = generar_sismos_demo_escenario(config, esc)
+    df_sismos = generar_sismos_demo(config)
     df_sismos_local = filtrar_sismos_estacion(df_sismos, config["lat"], config["lon"])
-    total_sismos_chile = esc["sismos_chile_14d"]
-    total_sismos = esc["sismos_locales_14d"]
-    b_val = esc["b_value"]
-    kp = esc["kp"]
-    shoa = esc["shoa"]
-    cond = esc["cond"]
-    presion = esc["presion"]
-    termico = esc["termico"]
-    insar = esc["insar"]
-    consultado_usgs = esc["consultado_usgs"]
-    consultado_noaa = esc["consultado_noaa"]
-    origen_em = f"DEMO · firma {esc['evento_ref']}"
-    gnss_info = None
-    atmos_info = None
-    cond_info = None
-    shoa_info = None
+    total_sismos_chile = len(df_sismos)
+    total_sismos = len(df_sismos_local)
+    b_val, kp = 0.55, 1
+    shoa, cond, presion, termico, insar, origen_em = 14.2, 8.4, 1013.0, 2.1, 94.0, "DEMO"
     nodo_offline = False
     bloque = "demo"
 else:
@@ -2828,7 +1550,7 @@ else:
 
     bloque, _ = bucket_telemetria(estacion_sel, ttl_seg)
     nodo_offline = modo_sat and random.Random(hash((estacion_sel, bloque, "offline"))).choice([True, False])
-    shoa, cond, presion, termico, insar, origen_em, gnss_info, atmos_info, cond_info, shoa_info = telemetria_estable(
+    shoa, cond, presion, termico, insar, origen_em = telemetria_estable(
         estacion_sel, config, total_sismos, ttl_seg, modo_sat, nodo_offline
     )
 
@@ -2836,8 +1558,7 @@ estado, icono, puntaje, log_filtro = calcular_riesgo_fusion(
     insar, total_sismos, b_val, cond, shoa, config, kp, termico, presion
 )
 estado, icono, puntaje, log_filtro = aplicar_control_calidad(
-    estado, icono, puntaje, log_filtro, modo_demo=modo_demo,
-    gnss_info=gnss_info, atmos_info=atmos_info, cond_info=cond_info, shoa_info=shoa_info,
+    estado, icono, puntaje, log_filtro, modo_demo=modo_demo
 )
 
 clave_log = f"{estacion_sel}_{round(puntaje, 1)}_{bloque if not modo_demo else 'demo'}"
@@ -2849,22 +1570,7 @@ df_match, mejor_ev, mejor_match = comparar_con_historico(insar, total_sismos, b_
 df_calibracion = construir_calibracion_estaciones(
     df_sismos, kp, ttl_seg, modo_sat, consultado_usgs, consultado_noaa
 )
-nivel_alerta = clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos, insar)
-
-if auditoria_mod and not modo_demo:
-    riesgo_loc_aud = riesgo_estacion_local(df_calibracion, estacion_sel)
-    motivos_aud = motivos_semaforo_simple(
-        nivel_alerta, puntaje, mejor_match, mejor_ev, total_sismos, b_val, insar,
-        riesgo_loc_aud, nombre_zona_simple(estacion_sel),
-    )
-    clave_auditoria = f"{estacion_sel}_{bloque}_{nivel_alerta['nivel']}"
-    if st.session_state.get("ultima_auditoria") != clave_auditoria:
-        auditoria_mod.registrar_alerta_semaforo(
-            estacion_sel, config, nivel_alerta, puntaje, mejor_match, mejor_ev,
-            total_sismos, motivos=motivos_aud, clave_bloque=clave_auditoria,
-        )
-        auditoria_mod.actualizar_resultados_auditoria(df_sismos)
-        st.session_state["ultima_auditoria"] = clave_auditoria
+nivel_alerta = clasificar_nivel_alerta(puntaje, mejor_match, b_val, total_sismos)
 
 clave_evidencia = f"evidencia_{estacion_sel}_{bloque}_{nivel_alerta['nivel']}_{round(puntaje, 1)}_{round(mejor_match, 1)}"
 if not modo_demo and st.session_state.get("ultima_evidencia") != clave_evidencia:
@@ -2877,15 +1583,14 @@ if not modo_demo and st.session_state.get("ultima_evidencia") != clave_evidencia
 
 telegram_estado = "Telegram desactivado."
 if telegram_activo:
-    puede_notificar, detalle_notificacion, motivo_telegram = debe_notificar_telegram(
-        estacion_sel, mejor_ev, puntaje, mejor_match, modo_demo, b_val, total_sismos, insar
+    puede_notificar, detalle_notificacion = debe_notificar_telegram(
+        estacion_sel, mejor_ev, puntaje, mejor_match, modo_demo
     )
     if puede_notificar:
         mensaje = construir_mensaje_telegram(
             estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
             mejor_ev, mejor_match, consultado_usgs,
-            nivel_alerta, nivel_alerta["ventana"],
-            motivo_disparo=motivo_telegram,
+            f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
             modo_demo=modo_demo,
         )
         ok_telegram, telegram_estado = enviar_telegram(mensaje)
@@ -2894,11 +1599,7 @@ if telegram_activo:
             telegram_estado = f"{telegram_estado} {estado_suscriptores}"
             st.session_state[detalle_notificacion] = ahora_chile()
     else:
-        telegram_estado = (
-            "Modo demo: envio automatico desactivado. Usa el boton de demo en la pestana VIVO."
-            if modo_demo
-            else detalle_notificacion
-        )
+        telegram_estado = detalle_notificacion
 
 # ==============================================================================
 # INTERFAZ
@@ -2919,566 +1620,426 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-if modo_simple:
-    st.caption(
-        f"Build **{APP_BUILD}** · Zona: **{nombre_zona_simple(estacion_sel)}** · "
-        f"Vista simple para decisiones · Cambia a **Técnica** en la barra lateral para monitoreo completo."
-    )
-else:
-    st.caption(
-        f"Build **{APP_BUILD}** | Enlace: **{canal}** | Caché APIs: **{intervalo}** | "
-        f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}**"
-    )
-if not modo_simple and (not mundo_lab or not mapa_tect or not informes_pdf):
+st.caption(
+    f"Build **{APP_BUILD}** | Enlace: **{canal}** | Caché APIs: **{intervalo}** | "
+    f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}**"
+)
+if not mundo_lab or not mapa_tect or not informes_pdf:
     st.warning(
         "Deploy incompleto en el servidor. Deben existir en GitHub: "
         "`nazca_mundo_lab.py`, `nazca_mapa_tectonico.py`, `nazca_informes_pdf.py` y `pydeck` en requirements.txt. "
         "Luego Reboot en Streamlit Cloud."
     )
 
-if modo_simple:
-    if api_nueva:
-        st.caption("Datos sísmicos recién actualizados.")
-    else:
-        st.caption(f"Última actualización registrada: {consultado_usgs}")
+if api_nueva:
+    st.success("Datos actualizados desde USGS / NOAA")
 else:
-    if api_nueva:
-        st.success("Datos actualizados desde USGS / NOAA")
-    else:
-        st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
+    st.info(f"📦 Sirviendo caché — USGS: {consultado_usgs} | NOAA Kp: {consultado_noaa}")
 
-if modo_simple:
-    tab_vivo, tab_acerca = st.tabs(["MONITOREO", "ACERCA DE"])
-    tab_hist = tab_cal = tab_calidad = tab_suscripcion = tab_evidencia = tab_mundo = tab_pipeline = None
-else:
-    _tabs_tecnico = [
-        "ESCANEO EN VIVO",
-        "COMPARATIVA M7+",
-        "CALIBRACIÓN ESTACIONES",
-        "INFORME DE CALIDAD",
-        "ACERCA DE",
-        "SUSCRIPCIÓN TELEGRAM",
-        "EVIDENCIA Y VALIDACIÓN",
-        "MUNDO (LAB)",
-    ]
-    if _pipeline_lab_activo():
-        _tabs_tecnico.append("PIPELINE (LAB)")
-    _tabs_objs = st.tabs(_tabs_tecnico)
-    tab_vivo = _tabs_objs[0]
-    tab_hist = _tabs_objs[1]
-    tab_cal = _tabs_objs[2]
-    tab_calidad = _tabs_objs[3]
-    tab_acerca = _tabs_objs[4]
-    tab_suscripcion = _tabs_objs[5]
-    tab_evidencia = _tabs_objs[6]
-    tab_mundo = _tabs_objs[7]
-    tab_pipeline = _tabs_objs[8] if _pipeline_lab_activo() else None
+_tab_labels = [
+    "ESCANEO EN VIVO",
+    "COMPARATIVA M7+",
+    "CALIBRACIÓN ESTACIONES",
+    "INFORME DE CALIDAD",
+    "SUSCRIPCIÓN TELEGRAM",
+    "EVIDENCIA Y VALIDACIÓN",
+]
+_tab_labels.append("MUNDO (LAB)")
+_tabs = st.tabs(_tab_labels)
+tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = _tabs[:6]
+tab_mundo = _tabs[6] if len(_tabs) > 6 else None
 
 with tab_vivo:
-    if modo_simple:
-        render_vista_simple(
-            estacion_sel, nivel_alerta, puntaje, total_sismos, total_sismos_chile,
-            mejor_ev, mejor_match, estado, b_val, insar, shoa, cond,
-            df_sismos, df_sismos_local, df_calibracion, config, consultado_usgs,
-            modo_demo, mapa_tect, nodo_offline,
-            admin_activo=admin_activo,
-            telegram_activo=telegram_activo,
-            sirena_activa=sirena_activa,
-            telegram_estado=telegram_estado,
+    if modo_demo and admin_activo:
+        st.error("MODO SIMULACIÓN CATASTRÓFICA ACTIVO - datos ficticios para prueba de respuesta.")
+    if puntaje >= 90:
+        st.error(f"CRÍTICO — Match {puntaje:.1f}%")
+    elif puntaje >= UMBRAL_CRITICO:
+        st.warning(f"ADVERTENCIA CRÍTICA — Match {puntaje:.1f}%")
+    elif puntaje >= 40:
+        st.warning(f"ATENCIÓN — Match {puntaje:.1f}%")
+    else:
+        st.success("Estable")
+
+    if nivel_alerta["nivel"] == "ROJO":
+        st.error(
+            f"{nivel_alerta['color']} ALERTA ROJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
+            f"{nivel_alerta['mensaje']}"
+        )
+        if sirena_activa:
+            clave_sirena = f"sirena_{estacion_sel}_{round(puntaje, 1)}_{mejor_ev}"
+            if st.session_state.get("ultima_sirena") != clave_sirena:
+                render_sirena_alerta()
+                st.session_state["ultima_sirena"] = clave_sirena
+    elif nivel_alerta["nivel"] == "NARANJO":
+        st.warning(
+            f"{nivel_alerta['color']} ALERTA NARANJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
+            f"{nivel_alerta['mensaje']}"
+        )
+    elif nivel_alerta["nivel"] == "AMARILLO":
+        st.warning(
+            f"{nivel_alerta['color']} ALERTA AMARILLA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
+            f"{nivel_alerta['mensaje']}"
         )
     else:
-        if modo_demo and admin_activo:
-            st.error("MODO SIMULACIÓN CATASTRÓFICA ACTIVO — ejemplo experimental, no alerta oficial.")
-            st.info(ESCENARIO_DEMO_CATASTROFICO["descripcion"])
-        if puntaje >= 90:
-            st.error(f"CRÍTICO — Match {puntaje:.1f}%")
-        elif puntaje >= UMBRAL_CRITICO:
-            st.warning(f"ADVERTENCIA CRÍTICA — Match {puntaje:.1f}%")
-        elif puntaje >= 40:
-            st.warning(f"ATENCIÓN — Match {puntaje:.1f}%")
-        else:
-            st.success("Estable")
+        st.info(f"{nivel_alerta['color']} Nivel verde: {nivel_alerta['mensaje']}")
 
-        if nivel_alerta["nivel"] == "ROJO":
-            st.error(
-                f"{nivel_alerta['color']} ALERTA ROJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
-                f"{nivel_alerta['mensaje']}"
+    st.caption(log_filtro)
+    if nodo_offline:
+        st.warning("Nodo offline — telemetría por interpolación de vecindad.")
+    if telegram_activo and admin_activo:
+        st.caption(f"Telegram vigilancia M7+: {telegram_estado}")
+        if st.button("Enviar prueba Telegram", use_container_width=True):
+            ok_test, msg_test = enviar_telegram(
+                "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
             )
-            if sirena_activa and nivel_alerta.get("sirena"):
-                clave_sirena = f"sirena_{estacion_sel}_{round(puntaje, 1)}_{mejor_ev}_{'demo' if modo_demo else bloque}"
-                if st.session_state.get("ultima_sirena") != clave_sirena:
-                    render_sirena_alerta()
-                    st.session_state["ultima_sirena"] = clave_sirena
-        elif nivel_alerta["nivel"] == "NARANJO":
-            st.warning(
-                f"{nivel_alerta['color']} ALERTA NARANJA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
-                f"{nivel_alerta['mensaje']}"
-            )
-        elif nivel_alerta["nivel"] == "AMARILLO":
-            st.warning(
-                f"{nivel_alerta['color']} ALERTA AMARILLA EXPERIMENTAL - ventana de vigilancia {nivel_alerta['ventana']}. "
-                f"{nivel_alerta['mensaje']}"
-            )
-        else:
-            st.info(f"{nivel_alerta['color']} Nivel verde: {nivel_alerta['mensaje']}")
-
-        zona_tec = nombre_zona_simple(estacion_sel)
-        est_sem_tec = ESTILO_SEMAFORO_NIVEL.get(
-            nivel_alerta.get("nivel", "VERDE"), ESTILO_SEMAFORO_NIVEL["VERDE"]
-        )
-        _cabecera_panel_sistema(
-            "1",
-            "SEMÁFORO NAZCA",
-            "Índice de vigilancia experimental (match M7+, sensores, umbrales dinámicos) · "
-            f"Nodo **{zona_tec}**",
-            est_sem_tec,
-            "nazca-panel-semaforo",
-        )
-        s1, s2, s3, s4, s5 = st.columns(5)
-        s1.metric("Nivel", f"{nivel_alerta['color']} {nivel_alerta['nivel']}")
-        s2.metric("Match NAZCA", f"{puntaje:.1f}%")
-        s3.metric("Patrón M7+", f"{mejor_match:.1f}%")
-        s4.metric("Sismos 14D local", total_sismos)
-        s5.metric("Ventana", nivel_alerta.get("ventana", "—"))
-        st.caption(
-            f"Semáforo: {nivel_alerta.get('mensaje', '')} · "
-            "Este sistema **no** usa GR/Omori; es independiente del bloque siguiente."
-        )
-
-        if forecast_mod:
-            fc_tec = forecast_mod.resumen_forecast_sismico(df_sismos_local)
-            render_panel_tendencia_gr(fc_tec, zona_tec, tecnico=True)
-
-        st.caption(log_filtro)
-        if nodo_offline:
-            st.warning("Nodo offline — telemetría por interpolación de vecindad.")
-        if modo_demo and admin_activo and sirena_activa:
-            if st.button("Probar sirena de emergencia (demo)", use_container_width=True):
-                render_sirena_alerta()
-                st.session_state["ultima_sirena"] = f"demo_manual_{ahora_chile().isoformat()}"
-
-        if telegram_activo and admin_activo:
-            st.caption(f"Telegram vigilancia M7+: {telegram_estado}")
-            if st.button("Enviar prueba Telegram", use_container_width=True, key="tec_tg_prueba"):
-                ok_test, msg_test = enviar_telegram(
-                    "NAZCA CORE MONITOR - prueba de Telegram. Sistema experimental de vigilancia tecnica."
-                )
-                if ok_test:
-                    st.success(msg_test)
-                else:
-                    st.error(msg_test)
-        render_panel_demo_telegram(
-            estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
-            mejor_ev, mejor_match, consultado_usgs, nivel_alerta,
-            admin_activo, telegram_activo, modo_demo, sirena_activa,
-            telegram_estado=telegram_estado, key_prefix="tec",
-        )
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Estado", f"{icono}")
-        c2.metric("Match", f"{puntaje:.1f}%")
-        c3.metric("Deformación", f"{insar:.1f}%", help="Índice NAZCA; con GNSS usa velocidad real mm/año (NGL MIDAS SA).")
-        c4.metric("b-value", f"{b_val}")
-        c5.metric("Kp NOAA", kp)
-        if atmos_info:
-            st.caption(
-                f"Atmósfera **{atmos_info['origen']}**: "
-                f"P={atmos_info['presion_hpa']:.1f} hPa · T={atmos_info['temp_c']:.1f} °C · "
-                f"HR={atmos_info['humedad_pct']:.0f}% · lluvia={atmos_info['precip_mm']:.1f} mm"
-            )
-        if cond_info and cond_info.get("cond_proxy_fisico"):
-            st.caption(
-                f"EM proxy **{cond_info['zona_suelo']}**: {cond_info['conductividad_ms_m']:.2f} mS/m "
-                f"(saturación agua est. {cond_info.get('saturacion_agua_est', 0):.2f})"
-            )
-        if shoa_info and shoa_info.get("shoa_real"):
-            conf_m = "confiable" if alertas.shoa_es_real(shoa_info) else "lejana"
-            st.caption(
-                f"SHOA **{shoa_info['codigo_ioc'].upper()}** ({conf_m}, {shoa_info.get('dist_km', '?')} km): "
-                f"anom={shoa_info['anomalia_cm']:.1f} cm · tasa={shoa_info['tasa_cm_h']:.1f} cm/h · "
-                f"{shoa_info.get('ultima_lectura', '')}"
-            )
-        if gnss_info:
-            conf_txt = "confiable" if gnss_info.get("gnss_confiable") else "lejana"
-            acel_txt = ""
-            acel = gnss_info.get("aceleracion") or {}
-            if acel.get("acelerando"):
-                acel_txt = (
-                    f" · **aceleración 1A** H={acel.get('horiz_reciente_mm_anio', 0):.1f} mm/yr "
-                    f"(×{acel.get('ratio_horizontal', 1):.2f})"
-                )
-            st.caption(
-                f"GNSS **{gnss_info['estacion_gnss']}** ({gnss_info.get('match', 'cercana')}, "
-                f"{gnss_info.get('dist_km', '?')} km, {conf_txt}): "
-                f"H={gnss_info['horiz_mm_anio']:.1f} mm/yr · V={gnss_info['vu_mm_anio']:.1f} mm/yr"
-                f"{acel_txt} · {gnss_info['marco']}"
-            )
-
-        c6, c7, c8 = st.columns(3)
-        c6.metric("Patrón M7+", f"{mejor_match:.1f}%")
-        c7.metric("Nivel alerta", f"{nivel_alerta['color']} {nivel_alerta['nivel']}")
-        c8.metric("Ventana vigilancia", nivel_alerta["ventana"])
-
-        c9, c10 = st.columns(2)
-        c9.metric("EM (Z-score)", f"{cond} mS/m")
-        c10.metric("SHOA", f"{shoa} cm")
-
-        col_mapa, col_tabla = st.columns([1.8, 1.2])
-        df_tension_tabla = pd.DataFrame()
-        with col_mapa:
-            st.markdown("#### Mapa de tensión acumulada · Cinturón de Fuego")
-            st.caption(
-                "El mapa muestra **dónde se acumula tensión** (14D USGS + modelo NAZCA). "
-                "Los temblores pasados quedan en la tabla lateral."
-            )
-            if mapa_tect:
-                df_tension_tabla, _ = mapa_tect.render_mapa_tension(
-                    df_sismos=df_sismos,
-                    df_calibracion=df_calibracion,
-                    estaciones_config=ESTACIONES_CONFIG,
-                    estacion_lat=config["lat"],
-                    estacion_lon=config["lon"],
-                    estacion_label=estacion_sel,
-                    zoom=4,
-                    altura=400,
-                    mapa_nativo=_usar_mapa_nativo(modo_demo),
-                )
-                st.caption(mapa_tect.leyenda_mapa_tension())
-                if not df_tension_tabla.empty:
-                    n_alta = int((df_tension_tabla["tension_pct"] >= 70).sum())
-                    n_anom = int(
-                        (~df_tension_tabla["anomalias"].astype(str).str.contains(
-                            "Normal|normales", case=False, na=False
-                        )).sum()
-                    )
-                    st.caption(f"**Vigilancia:** {n_alta} zona(s) con tension >=70% · {n_anom} con parametros anomalos")
+            if ok_test:
+                st.success(msg_test)
             else:
-                _render_mapa_anillo_fuego(
-                    df_sismos_local, config["lat"], config["lon"], estacion_sel,
-                    zoom=4, altura=400, modo_demo=modo_demo,
-                    mapa_principal=True,
-                )
-
-        with col_tabla:
-            st.markdown("##### Sismos 14D — estación activa")
-            st.caption(
-                f"Origen EM: {origen_em} | Sismos 14D Chile: {total_sismos_chile} | "
-                f"Radio {RADIO_ESTACION_KM} km: {total_sismos} | USGS: {consultado_usgs}"
+                st.warning(msg_test)
+        if modo_demo and st.button("Enviar demo de emergencia Telegram", use_container_width=True):
+            mensaje_demo = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+                modo_demo=True,
             )
+            ok_demo, msg_demo = enviar_telegram(mensaje_demo)
+            if ok_demo:
+                st.success(msg_demo)
+            else:
+                st.warning(msg_demo)
+        if modo_demo and st.button("Enviar demo de emergencia a suscriptores", use_container_width=True):
+            mensaje_demo_suscriptores = construir_mensaje_telegram(
+                estacion_sel, estado, puntaje, b_val, total_sismos, insar, cond, shoa,
+                mejor_ev, mejor_match, consultado_usgs,
+                f"{nivel_alerta['color']} {nivel_alerta['nivel']}", nivel_alerta["ventana"],
+                modo_demo=True,
+            )
+            enviados, errores = enviar_prueba_suscriptores(mensaje_demo_suscriptores)
+            st.info(f"Demo enviada a suscriptores activos: {enviados} | errores: {errores}")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Estado", f"{icono}")
+    c2.metric("Match", f"{puntaje:.1f}%")
+    c3.metric("InSAR", f"{insar:.1f}%")
+    c4.metric("b-value", f"{b_val}")
+    c5.metric("Kp NOAA", kp)
+
+    c6, c7, c8 = st.columns(3)
+    c6.metric("Patrón M7+", f"{mejor_match:.1f}%")
+    c7.metric("Nivel alerta", f"{nivel_alerta['color']} {nivel_alerta['nivel']}")
+    c8.metric("Ventana vigilancia", nivel_alerta["ventana"])
+
+    c9, c10 = st.columns(2)
+    c9.metric("EM (Z-score)", f"{cond} mS/m")
+    c10.metric("SHOA", f"{shoa} cm")
+
+    col_mapa, col_tabla = st.columns([1.8, 1.2])
+    with col_mapa:
+        st.markdown("#### Mapa sísmico regional + Cinturón de Fuego")
+        _render_mapa_anillo_fuego(
+            df_sismos_local, config["lat"], config["lon"], estacion_sel, zoom=4, altura=400,
+        )
+
+    with col_tabla:
+        st.caption(
+            f"Origen EM: {origen_em} | Sismos 14D Chile: {total_sismos_chile} | "
+            f"Cálculo local {RADIO_ESTACION_KM} km: {total_sismos} | USGS: {consultado_usgs}"
+        )
+        st.dataframe(
+            df_sismos_local[["Magnitud", "Lugar", "Fecha", "Distancia_km"]] if not df_sismos_local.empty else pd.DataFrame(columns=["Magnitud", "Lugar", "Fecha", "Distancia_km"]),
+            height=200, use_container_width=True,
+        )
+
+    st.markdown("#### 📄 Informes PDF")
+    col_pdf1, col_pdf2 = st.columns(2)
+    with col_pdf1:
+        if st.button("Generar PDF técnico", use_container_width=True):
+            st.session_state["pdf"] = generar_pdf(
+                estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp,
+                config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
+                total_sismos_chile, consultado_usgs, consultado_noaa, nivel_alerta=nivel_alerta, modo_demo=modo_demo,
+            )
+        if st.session_state.get("pdf"):
+            st.download_button(
+                "⬇️ Guardar PDF técnico",
+                st.session_state["pdf"],
+                f"Informe_Tecnico_Nazca_{config['id']}.pdf",
+                "application/pdf",
+                use_container_width=True,
+            )
+    with col_pdf2:
+        if informes_pdf:
+            st.markdown("##### Comparativa 14D vs gran sismo Chile")
             st.dataframe(
-                _df_ui(df_sismos_local[["Magnitud", "Lugar", "Fecha", "Distancia_km"]] if not df_sismos_local.empty else pd.DataFrame(columns=["Magnitud", "Lugar", "Fecha", "Distancia_km"])),
-                height=180, use_container_width=True,
+                informes_pdf.tabla_comparativa_chile(
+                    b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, EVENTOS_M7, mejor_ev,
+                ),
+                use_container_width=True,
+                hide_index=True,
             )
-            if not df_tension_tabla.empty:
-                st.markdown("##### Tensión por zona / nodo")
-                st.dataframe(
-                    _df_ui(df_tension_tabla.rename(columns={
-                        "zona": "Zona",
-                        "tension_pct": "Tensión %",
-                        "sismos_14d": "Sismos 14D",
-                        "b_value": "b-value",
-                        "anomalias": "Parámetros",
-                    })),
-                    height=180,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            ult_local = df_sismos_local.iloc[0].to_dict() if not df_sismos_local.empty else None
+            pdf_comp_chile = informes_pdf.generar_pdf_comparativa_chile(
+                estacion=estacion_sel, config=config, puntaje=puntaje, estado=estado,
+                nivel_alerta=nivel_alerta, b_val=b_val, insar=insar, cond=cond, shoa=shoa,
+                total_sismos=total_sismos, total_sismos_chile=total_sismos_chile,
+                mejor_ev=mejor_ev, mejor_match=mejor_match, consultado_usgs=consultado_usgs,
+                eventos_m7=EVENTOS_M7, df_evidencia=leer_evidencia_preevento(),
+                coincidencias=pd.DataFrame(), ultimo_sismo=ult_local,
+                ahora=pd.Timestamp(ahora_chile()), logo_path=LOGO_PATH,
+            )
+            st.download_button(
+                "⬇️ Informe comparativo 14D (PDF)",
+                pdf_comp_chile,
+                f"comparativa_chile_{config['id']}.pdf",
+                "application/pdf",
+                use_container_width=True,
+            )
+            with st.expander("👁️ Ver PDF comparativo en la página", expanded=False):
+                st.markdown(informes_pdf.html_vista_previa_pdf(pdf_comp_chile), unsafe_allow_html=True)
+        else:
+            st.caption("Sube `nazca_informes_pdf.py` para activar comparativa PDF.")
 
-        st.markdown("#### 📄 Informes PDF")
-        col_pdf1, col_pdf2 = st.columns(2)
-        with col_pdf1:
-            if st.button("Generar PDF técnico", use_container_width=True):
-                st.session_state["pdf"] = generar_pdf(
-                    estacion_sel, puntaje, estado, b_val, cond, shoa, total_sismos, canal, kp,
-                    config, insar, presion, termico, origen_em, mejor_ev, mejor_match,
-                    total_sismos_chile, consultado_usgs, consultado_noaa, nivel_alerta=nivel_alerta, modo_demo=modo_demo,
+with tab_hist:
+    st.markdown("### Referencia histórica CHILE — Match vs terremotos M7+ (14D pre-sismo)")
+    st.caption("Solo eventos nacionales. Terremotos mundiales están en la pestaña MUNDO (LAB).")
+    st.dataframe(pd.DataFrame([{
+        "Evento": e["evento"], "Magnitud": e["mag"], "b-value 14D": e["b_14d"],
+        "Sismos": e["sismos_14d"], "InSAR": e["insar"], "EM": e["cond"], "SHOA": e["shoa"],
+    } for e in EVENTOS_M7]), use_container_width=True, hide_index=True)
+
+    st.markdown("#### Match calculado con telemetría actual")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Match riesgo actual", f"{puntaje:.1f}%")
+    m2.metric("Similitud M7+", f"{mejor_match:.1f}%")
+    m3.metric("Evento más parecido", mejor_ev)
+    st.dataframe(df_match, use_container_width=True, hide_index=True)
+
+    if mejor_match >= 75 and puntaje >= UMBRAL_CRITICO:
+        st.error(f"Patrón crítico alineado con **{mejor_ev}**.")
+    elif mejor_match >= 60:
+        st.warning(f"Similitud notable con **{mejor_ev}** ({mejor_match:.1f}%).")
+
+with tab_cal:
+    st.markdown("### Calibración de estaciones")
+    st.caption(
+        "Esta tabla usa una ventana móvil sísmica 14D de Chile y recalcula SHOA, InSAR, EM, presión, térmico, "
+        "riesgo y match M7+ por estación. La base se refresca por caché en horas, no en cada recarga, para evitar ruido y lentitud."
+    )
+    st.dataframe(df_calibracion, use_container_width=True, hide_index=True)
+    st.download_button(
+        "Descargar calibración CSV",
+        df_calibracion.to_csv(index=False).encode("utf-8-sig"),
+        "calibracion_estaciones_nazca.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+
+with tab_calidad:
+    st.markdown("### Informe de calidad y transparencia")
+    st.info(
+        "Este módulo documenta cómo calcula el sistema, qué datos son reales, qué datos son estimados "
+        "y cómo debe realizarse la calibración mensual para mantener trazabilidad técnica."
+    )
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Fuente sísmica", "USGS 14D móvil")
+    q2.metric("Radio local", f"{RADIO_ESTACION_KM} km")
+    q3.metric("Tope heurístico", f"{MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:.0f}%")
+    q4.metric("Caché APIs", f"{ttl_horas} h")
+
+    st.markdown("#### Parámetros activos")
+    df_parametros = pd.DataFrame([
+        {"Parámetro": "SISMO_BVAL", "Valor": PESOS["SISMO_BVAL"], "Calidad": "REAL/CALCULADO", "Uso": "Peso de b-value y actividad sísmica local"},
+        {"Parámetro": "INSAR", "Valor": PESOS["INSAR"], "Calidad": "ESTIMADO", "Uso": "Deformación cortical estimada"},
+        {"Parámetro": "CONDUCT", "Valor": PESOS["CONDUCT"], "Calidad": "ESTIMADO", "Uso": "Anomalía electromagnética"},
+        {"Parámetro": "SHOA", "Valor": PESOS["SHOA"], "Calidad": "ESTIMADO", "Uso": "Residuo mareográfico/SHOA simulado"},
+        {"Parámetro": "ATMOS", "Valor": PESOS["ATMOS"], "Calidad": "ESTIMADO", "Uso": "Presión y componente térmico"},
+        {"Parámetro": "UMBRAL_CRITICO", "Valor": UMBRAL_CRITICO, "Calidad": "MODELO", "Uso": "Umbral interno de riesgo"},
+        {"Parámetro": "RADIO_ESTACION_KM", "Valor": RADIO_ESTACION_KM, "Calidad": "MODELO", "Uso": "Radio local usado para calcular cada estación"},
+        {"Parámetro": "MAX_RIESGO_ESTIMADO", "Valor": MAX_RIESGO_CON_TELEMETRIA_ESTIMADA, "Calidad": "CONTROL", "Uso": "Evita alerta crítica con telemetría no instrumental"},
+        {"Parámetro": "VENTANA_SISMICA", "Valor": "14D móvil", "Calidad": "OPERATIVO", "Uso": "Recalcula con datos frescos disponibles sin esperar un ciclo completo"},
+        {"Parámetro": "CACHE_API", "Valor": f"{ttl_horas} h", "Calidad": "OPERATIVO", "Uso": "Reduce llamadas a USGS/NOAA y estabiliza la app pública"},
+    ])
+<<<<<<< Updated upstream
+    st.dataframe(df_parametros, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Protocolo mensual de calibración")
+    st.write(
+        "1. Exportar la tabla de calibración de estaciones.\n"
+        "2. Revisar bitácora del mes contra ventanas móviles USGS 14D.\n"
+        "3. Separar falsos positivos y falsos negativos.\n"
+        "4. Ajustar baselines por estación solo con evidencia.\n"
+        "5. Documentar fecha, responsable y motivo del cambio.\n"
+        "6. Mantener visible qué fuentes son reales, estimadas o simuladas."
+    )
+
+    informe_calidad = generar_informe_calidad_texto(
+        df_calibracion, consultado_usgs, consultado_noaa, ttl_seg
+    )
+    st.download_button(
+        "Descargar informe de calidad TXT",
+        informe_calidad.encode("utf-8"),
+        "informe_calidad_nazca.txt",
+        "text/plain",
+        use_container_width=True,
+    )
+    with st.expander("Ver informe completo"):
+        st.text(informe_calidad)
+
+with tab_suscripcion:
+    st.markdown("### Suscripción gratuita Telegram")
+    st.info(
+        "Registro gratuito para participar en pruebas privadas del sistema. Las notificaciones son experimentales, "
+        "no oficiales y no representan una predicción determinística."
+    )
+    st.caption(
+        "Privacidad: el registro no se muestra públicamente en la web. Los datos se usan solo para enviar avisos "
+        "experimentales por Telegram."
+    )
+    st.caption(
+        "Nota técnica: en Streamlit Cloud los registros hechos desde la web pueden reiniciarse al redeploy. "
+        "Para suscriptores permanentes usa TELEGRAM_SUBSCRIBERS_JSON en Secrets privados."
+    )
+    if apps_script_configurado():
+        st.success("Registro persistente conectado a Google Sheets privado.")
+    else:
+        st.warning("Registro persistente Google Sheets no configurado. La suscripción web puede ser temporal.")
+    st.write(
+        "Para suscribirte: abre el bot de Telegram, presiona **Start** o envía `/start`, "
+        "obtén tu **Chat ID** con @userinfobot o @RawDataBot, y completa este formulario."
+    )
+
+    with st.form("form_suscripcion_telegram"):
+        nombre_sub = st.text_input("Nombre o alias", placeholder="Ej: Sandro, primo, equipo pruebas")
+        chat_id_sub = st.text_input("Telegram Chat ID", placeholder="Ej: 7321245766")
+        estacion_sub = st.selectbox("Zona / estación de interés", ["Todas"] + list(ESTACIONES_CONFIG.keys()))
+        nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=0)
+        acepta_sub = st.checkbox("Acepto participar en una prueba gratuita, experimental y no oficial.")
+        registrar_sub = st.form_submit_button("Suscribirme gratis / actualizar datos", use_container_width=True)
+
+    if registrar_sub:
+        if not chat_id_sub.strip().isdigit():
+            st.warning("El Chat ID debe contener solo números.")
+        elif not acepta_sub:
+            st.warning("Debes aceptar la condición experimental/no oficial.")
+        else:
+            sub = upsert_suscriptor_telegram(nombre_sub, chat_id_sub, estacion_sub, nivel_sub)
+            st.success(f"Suscripción gratuita registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
+            ok_bienvenida, msg_bienvenida = enviar_telegram(
+                "NAZCA CORE MONITOR - suscripcion gratuita registrada. Recibiras avisos experimentales segun tu configuracion. No es alerta oficial.",
+                chat_id=sub["chat_id"],
+            )
+            if ok_bienvenida:
+                st.success("Mensaje de bienvenida enviado por Telegram.")
+            else:
+                st.warning(f"Suscripción guardada, pero Telegram respondió: {msg_bienvenida}")
+
+    st.markdown("#### Estado privado de suscripción")
+    st.caption(
+        f"Suscriptores activos registrados: {contar_suscriptores_activos()}. "
+        "Por privacidad, nombres y Chat ID no se muestran en la interfaz pública."
+    )
+
+    if admin_activo:
+        st.markdown("#### Pruebas de envío admin")
+        chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
+        if st.button("Enviar prueba a suscriptor", use_container_width=True):
+            if not chat_prueba.strip().isdigit():
+                st.warning("Ingresa un Chat ID numérico.")
+            else:
+                ok_sub, msg_sub = enviar_telegram(
+                    "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
+                    chat_id=chat_prueba.strip(),
                 )
-            if st.session_state.get("pdf"):
+                if ok_sub:
+                    st.success(msg_sub)
+                else:
+                    st.warning(msg_sub)
+
+        if st.button("Enviar prueba a todos los suscriptores activos", use_container_width=True):
+            enviados, errores = enviar_prueba_suscriptores(
+                "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
+            )
+            st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
+
+with tab_evidencia:
+    if not admin_activo:
+        st.info("Módulo privado. Ingresa PIN admin para revisar evidencia y validación.")
+    else:
+        st.markdown("### Evidencia y validación post-evento")
+        st.caption(
+            f"Hora actual del sistema: **{ahora_chile().strftime('%Y-%m-%d %H:%M:%S')}** ({CHILE_TZ_LABEL})"
+        )
+        st.info(
+            "Este módulo cruza snapshots previos del sistema contra eventos USGS posteriores. "
+            "Su objetivo es documentar coincidencias experimentales, falsos positivos y trazabilidad."
+        )
+        df_evidencia = leer_evidencia_preevento()
+        eventos_validacion = eventos_usgs_validacion(df_sismos, magnitud_min=5.0)
+        coincidencias = evaluar_coincidencias_evidencia(df_evidencia, eventos_validacion)
+
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Snapshots guardados", len(df_evidencia))
+        e2.metric("Eventos USGS M5+", len(eventos_validacion))
+        e3.metric("Coincidencias", len(coincidencias))
+
+        if not df_evidencia.empty:
+            st.markdown("#### Últimas evidencias previas")
+            st.caption(
+                f"Fechas en {CHILE_TZ_LABEL}. "
+                "Los registros guardados antes de este ajuste pueden mostrar hora UTC del servidor (+4 h respecto a Chile)."
+            )
+            cols_evidencia = [
+                "fecha_hora", "estacion", "nivel", "puntaje", "match_m7",
+                "b_value", "sismos_locales_14d", "hash_evidencia",
+            ]
+            st.dataframe(df_evidencia[cols_evidencia].tail(25).sort_values("fecha_hora", ascending=False), use_container_width=True, hide_index=True)
+            st.download_button(
+                "Descargar evidencia previa CSV",
+                df_evidencia.drop(columns=["fecha_hora_dt"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
+                "nazca_evidencia_preevento.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("Aún no hay snapshots de evidencia previa guardados.")
+
+        st.markdown("#### Coincidencias post-evento")
+        if not coincidencias.empty:
+            st.dataframe(coincidencias, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No hay coincidencias bajo los criterios actuales.")
+
+        st.markdown("#### 📄 Informes comparativos 14D (PDF)")
+        if informes_pdf:
+            st.dataframe(
+                informes_pdf.tabla_comparativa_chile(
+                    b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, EVENTOS_M7, mejor_ev,
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            ult_ev = eventos_validacion.iloc[0].to_dict() if not eventos_validacion.empty else None
+            pdf_chile = informes_pdf.generar_pdf_comparativa_chile(
+                estacion=estacion_sel, config=config, puntaje=puntaje, estado=estado,
+                nivel_alerta=nivel_alerta, b_val=b_val, insar=insar, cond=cond, shoa=shoa,
+                total_sismos=total_sismos, total_sismos_chile=total_sismos_chile,
+                mejor_ev=mejor_ev, mejor_match=mejor_match, consultado_usgs=consultado_usgs,
+                eventos_m7=EVENTOS_M7, df_evidencia=df_evidencia, coincidencias=coincidencias,
+                ultimo_sismo=ult_ev, ahora=pd.Timestamp(ahora_chile()), logo_path=LOGO_PATH,
+            )
+            col_val_txt, col_val_pdf = st.columns(2)
+            with col_val_pdf:
                 st.download_button(
-                    "⬇️ Guardar PDF técnico",
-                    st.session_state["pdf"],
-                    f"Informe_Tecnico_Nazca_{config['id']}.pdf",
+                    "⬇️ Informe comparativo 14D Chile (PDF)",
+                    pdf_chile,
+                    f"comparativa_chile_{estacion_sel[:24].replace(' ', '_')}.pdf",
                     "application/pdf",
                     use_container_width=True,
-                    key=f"dl_pdf_tecnico_{config['id']}",
                 )
-        with col_pdf2:
-            if informes_pdf:
-                st.markdown("##### Comparativa 14D vs gran sismo Chile")
-                st.dataframe(
-                    _df_ui(informes_pdf.tabla_comparativa_chile(
-                        b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, EVENTOS_M7, mejor_ev,
-                    )),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                ult_local = df_sismos_local.iloc[0].to_dict() if not df_sismos_local.empty else None
-                pdf_comp_chile = informes_pdf.generar_pdf_comparativa_chile(
-                    estacion=estacion_sel, config=config, puntaje=puntaje, estado=estado,
-                    nivel_alerta=nivel_alerta, b_val=b_val, insar=insar, cond=cond, shoa=shoa,
-                    total_sismos=total_sismos, total_sismos_chile=total_sismos_chile,
-                    mejor_ev=mejor_ev, mejor_match=mejor_match, consultado_usgs=consultado_usgs,
-                    eventos_m7=EVENTOS_M7, df_evidencia=leer_evidencia_preevento(),
-                    coincidencias=pd.DataFrame(), ultimo_sismo=ult_local,
-                    ahora=pd.Timestamp(ahora_chile()), logo_path=LOGO_PATH,
-                )
-                informes_pdf.boton_descarga_pdf(
-                    pdf_comp_chile,
-                    f"comparativa_chile_{config['id']}.pdf",
-                    boton_key=f"dl_pdf_chile_vivo_{config['id']}",
-                    etiqueta="⬇️ Informe comparativo 14D Chile (PDF)",
-                )
-            else:
-                st.caption("Sube `nazca_informes_pdf.py` para activar comparativa PDF.")
-
-if not modo_simple:
-    with tab_hist:
-        st.markdown("### Referencia histórica CHILE — Match vs terremotos M7+ (14D pre-sismo)")
-        st.caption("Solo eventos nacionales. Terremotos mundiales están en la pestaña MUNDO (LAB).")
-        st.dataframe(_df_ui(pd.DataFrame([{
-            "Evento": e["evento"], "Magnitud": e["mag"], "b-value 14D": e["b_14d"],
-            "Sismos": e["sismos_14d"], "InSAR": e["insar"], "EM": e["cond"], "SHOA": e["shoa"],
-        } for e in EVENTOS_M7])), use_container_width=True, hide_index=True)
-
-        st.markdown("#### Match calculado con telemetría actual")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Match riesgo actual", f"{puntaje:.1f}%")
-        m2.metric("Similitud M7+", f"{mejor_match:.1f}%")
-        m3.metric("Evento más parecido", mejor_ev)
-        st.dataframe(_df_ui(df_match), use_container_width=True, hide_index=True)
-
-        if mejor_match >= 75 and puntaje >= UMBRAL_CRITICO:
-            st.error(f"Patrón crítico alineado con **{mejor_ev}**.")
-        elif mejor_match >= 60:
-            st.warning(f"Similitud notable con **{mejor_ev}** ({mejor_match:.1f}%).")
-
-    with tab_cal:
-        st.markdown("### Calibración de estaciones")
-        st.caption(
-            "Esta tabla usa una ventana móvil sísmica 14D de Chile y recalcula SHOA, InSAR, EM, presión, térmico, "
-            "riesgo y match M7+ por estación. La base se refresca por caché en horas, no en cada recarga, para evitar ruido y lentitud."
-        )
-        st.dataframe(_df_ui(df_calibracion), use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar calibración CSV",
-            df_calibracion.to_csv(index=False).encode("utf-8-sig"),
-            "calibracion_estaciones_nazca.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-
-    with tab_calidad:
-        st.markdown("### Informe de calidad y transparencia")
-        st.info(
-            "Este módulo documenta cómo calcula el sistema, qué datos son reales, qué datos son estimados "
-            "y cómo debe realizarse la calibración mensual para mantener trazabilidad técnica."
-        )
-
-        q1, q2, q3, q4 = st.columns(4)
-        q1.metric("Fuente sísmica", "USGS 14D móvil")
-        q2.metric("Radio local", f"{RADIO_ESTACION_KM} km")
-        q3.metric("Tope heurístico", f"{MAX_RIESGO_CON_TELEMETRIA_ESTIMADA:.0f}%")
-        q4.metric("Caché APIs", f"{ttl_horas} h")
-
-        st.markdown("#### Parámetros activos")
-        df_parametros = pd.DataFrame([
-            {"Parámetro": "SISMO_BVAL", "Valor": PESOS["SISMO_BVAL"], "Calidad": "REAL/CALCULADO", "Uso": "Peso de b-value y actividad sísmica local"},
-            {"Parámetro": "INSAR", "Valor": PESOS["INSAR"], "Calidad": "ESTIMADO", "Uso": "Deformación cortical estimada"},
-            {"Parámetro": "CONDUCT", "Valor": PESOS["CONDUCT"], "Calidad": "ESTIMADO", "Uso": "Anomalía electromagnética"},
-            {"Parámetro": "SHOA", "Valor": PESOS["SHOA"], "Calidad": "REAL (IOC)", "Uso": "Anomalía mareográfica IOC UNESCO por nodo"},
-            {"Parámetro": "ATMOS", "Valor": PESOS["ATMOS"], "Calidad": "ESTIMADO", "Uso": "Presión y componente térmico"},
-            {"Parámetro": "UMBRAL_CRITICO", "Valor": UMBRAL_CRITICO, "Calidad": "MODELO", "Uso": "Umbral interno de riesgo"},
-            {"Parámetro": "RADIO_ESTACION_KM", "Valor": RADIO_ESTACION_KM, "Calidad": "MODELO", "Uso": "Radio local usado para calcular cada estación"},
-            {"Parámetro": "MAX_RIESGO_ESTIMADO", "Valor": MAX_RIESGO_CON_TELEMETRIA_ESTIMADA, "Calidad": "CONTROL", "Uso": "Evita alerta crítica con telemetría no instrumental"},
-            {"Parámetro": "VENTANA_SISMICA", "Valor": "14D móvil", "Calidad": "OPERATIVO", "Uso": "Recalcula con datos frescos disponibles sin esperar un ciclo completo"},
-            {"Parámetro": "CACHE_API", "Valor": f"{ttl_horas} h", "Calidad": "OPERATIVO", "Uso": "Reduce llamadas a USGS/NOAA y estabiliza la app pública"},
-        ])
-        st.dataframe(_df_ui(df_parametros), use_container_width=True, hide_index=True)
-
-        st.markdown("#### Protocolo mensual de calibración")
-        st.write(
-            "1. Exportar la tabla de calibración de estaciones.\n"
-            "2. Revisar bitácora del mes contra ventanas móviles USGS 14D.\n"
-            "3. Separar falsos positivos y falsos negativos.\n"
-            "4. Ajustar baselines por estación solo con evidencia.\n"
-            "5. Documentar fecha, responsable y motivo del cambio.\n"
-            "6. Mantener visible qué fuentes son reales, estimadas o simuladas."
-        )
-
-        informe_calidad = generar_informe_calidad_texto(
-            df_calibracion, consultado_usgs, consultado_noaa, ttl_seg
-        )
-        st.download_button(
-            "Descargar informe de calidad TXT",
-            informe_calidad.encode("utf-8"),
-            "informe_calidad_nazca.txt",
-            "text/plain",
-            use_container_width=True,
-        )
-        with st.expander("Ver informe completo"):
-            st.text(informe_calidad)
-
-    with tab_suscripcion:
-        st.markdown("### Suscripción gratuita Telegram — Chile")
-        st.info(
-            "Registro gratuito para vigilancia experimental de **Chile** (estaciones nacionales). "
-            "La pestaña MUNDO (LAB) es implementación separada y **no usa esta lista de suscriptores**. "
-            "Las notificaciones son experimentales, no oficiales y no representan una predicción determinística."
-        )
-        st.caption(
-            "Privacidad: el registro no se muestra públicamente en la web. Los datos se usan solo para enviar avisos "
-            "experimentales por Telegram."
-        )
-        st.caption(
-            "Nota técnica: sin Google Sheets, los registros hechos desde la web pueden perderse al redeploy. "
-            "Configura `SUBSCRIBERS_WEBAPP_URL` y `SUBSCRIBERS_API_KEY` (ver GOOGLE_APPS_SCRIPT.md)."
-        )
-        if apps_script_configurado():
-            st.success("Registro persistente conectado a Google Sheets privado.")
-        else:
-            faltan = [
-                nombre for nombre in ("SUBSCRIBERS_WEBAPP_URL", "SUBSCRIBERS_API_KEY")
-                if not obtener_secret(nombre)
-            ]
-            st.warning(
-                "Registro persistente Google Sheets no configurado. La suscripción web puede ser temporal. "
-                f"Falta en secrets: {', '.join(faltan)}. Sigue GOOGLE_APPS_SCRIPT.md y reinicia la app."
-            )
-        st.write(
-            "Para suscribirte: abre el bot de Telegram, presiona **Start** o envía `/start`, "
-            "obtén tu **Chat ID** con @userinfobot o @RawDataBot, y completa este formulario."
-        )
-
-        with st.form("form_suscripcion_telegram"):
-            nombre_sub = st.text_input("Nombre o alias", placeholder="Ej: Sandro, primo, equipo pruebas")
-            chat_id_sub = st.text_input("Telegram Chat ID", placeholder="Ej: 7321245766")
-            estacion_sub = st.selectbox(
-                "Zona / estación Chile de interés",
-                ["Todas"] + list(ESTACIONES_CONFIG.keys()),
-            )
-            nivel_sub = st.selectbox("Nivel mínimo para recibir aviso", ["AMARILLO", "NARANJO", "ROJO"], index=0)
-            acepta_sub = st.checkbox("Acepto participar en una prueba gratuita, experimental y no oficial.")
-            registrar_sub = st.form_submit_button("Suscribirme gratis / actualizar datos", use_container_width=True)
-
-        if registrar_sub:
-            if not chat_id_sub.strip().isdigit():
-                st.warning("El Chat ID debe contener solo números.")
-            elif not acepta_sub:
-                st.warning("Debes aceptar la condición experimental/no oficial.")
-            else:
-                sub = upsert_suscriptor_telegram(nombre_sub, chat_id_sub, estacion_sub, nivel_sub)
-                st.success(f"Suscripción gratuita registrada para {sub['nombre']} ({sub['nivel_minimo']}).")
-                ok_bienvenida, msg_bienvenida = enviar_telegram(
-                    "NAZCA CORE MONITOR - suscripcion Chile registrada. Recibiras avisos experimentales "
-                    "de estaciones nacionales segun tu configuracion. MUNDO LAB no incluido. No es alerta oficial.",
-                    chat_id=sub["chat_id"],
-                )
-                if ok_bienvenida:
-                    st.success("Mensaje de bienvenida enviado por Telegram.")
-                else:
-                    st.warning(f"Suscripción guardada, pero Telegram respondió: {msg_bienvenida}")
-
-        st.markdown("#### Estado privado de suscripción")
-        st.caption(
-            f"Suscriptores activos registrados: {contar_suscriptores_activos()}. "
-            "Por privacidad, nombres y Chat ID no se muestran en la interfaz pública."
-        )
-
-        if admin_activo:
-            st.markdown("#### Pruebas de envío admin")
-            chat_prueba = st.text_input("Chat ID para prueba individual", placeholder="Pega aquí el Chat ID")
-            if st.button("Enviar prueba a suscriptor", use_container_width=True):
-                if not chat_prueba.strip().isdigit():
-                    st.warning("Ingresa un Chat ID numérico.")
-                else:
-                    ok_sub, msg_sub = enviar_telegram(
-                        "NAZCA CORE MONITOR - prueba de suscripcion familiar. Uso privado experimental, no alerta oficial.",
-                        chat_id=chat_prueba.strip(),
-                    )
-                    if ok_sub:
-                        st.success(msg_sub)
-                    else:
-                        st.warning(msg_sub)
-
-            if st.button("Enviar prueba a todos los suscriptores activos", use_container_width=True):
-                enviados, errores = enviar_prueba_suscriptores(
-                    "NAZCA CORE MONITOR - prueba general de suscripcion gratuita. Uso experimental privado, no alerta oficial."
-                )
-                st.info(f"Prueba enviada a suscriptores activos: {enviados} | errores: {errores}")
-
-    with tab_evidencia:
-        if not admin_activo:
-            st.info("Módulo privado. Ingresa PIN admin para revisar evidencia y validación.")
-        else:
-            st.markdown("### Evidencia y validación post-evento")
-            st.caption(
-                f"Hora actual del sistema: **{ahora_chile().strftime('%Y-%m-%d %H:%M:%S')}** ({CHILE_TZ_LABEL})"
-            )
-            st.info(
-                "Este módulo cruza snapshots previos del sistema contra eventos USGS posteriores. "
-                "Su objetivo es documentar coincidencias experimentales, falsos positivos y trazabilidad."
-            )
-            df_evidencia = leer_evidencia_preevento()
-            eventos_validacion = eventos_usgs_validacion(df_sismos, magnitud_min=5.0)
-            coincidencias = evaluar_coincidencias_evidencia(df_evidencia, eventos_validacion)
-
-            e1, e2, e3 = st.columns(3)
-            e1.metric("Snapshots guardados", len(df_evidencia))
-            e2.metric("Eventos USGS M5+", len(eventos_validacion))
-            e3.metric("Coincidencias", len(coincidencias))
-
-            if not df_evidencia.empty:
-                st.markdown("#### Últimas evidencias previas")
-                st.caption(
-                    f"Fechas en {CHILE_TZ_LABEL}. "
-                    "Los registros guardados antes de este ajuste pueden mostrar hora UTC del servidor (+4 h respecto a Chile)."
-                )
-                cols_evidencia = [
-                    "fecha_hora", "estacion", "nivel", "puntaje", "match_m7",
-                    "b_value", "sismos_locales_14d", "hash_evidencia",
-                ]
-                st.dataframe(_df_ui(df_evidencia[cols_evidencia].tail(25).sort_values("fecha_hora", ascending=False)), use_container_width=True, hide_index=True)
-                st.download_button(
-                    "Descargar evidencia previa CSV",
-                    df_evidencia.drop(columns=["fecha_hora_dt"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
-                    "nazca_evidencia_preevento.csv",
-                    "text/csv",
-                    use_container_width=True,
-                )
-            else:
-                st.caption("Aún no hay snapshots de evidencia previa guardados.")
-
-            st.markdown("#### Coincidencias post-evento")
-            if not coincidencias.empty:
-                st.dataframe(_df_ui(coincidencias), use_container_width=True, hide_index=True)
-            else:
-                st.caption("No hay coincidencias bajo los criterios actuales.")
-
-            st.markdown("#### 📄 Informes comparativos 14D (PDF)")
-            if informes_pdf:
-                st.dataframe(
-                    _df_ui(informes_pdf.tabla_comparativa_chile(
-                        b_val, insar, cond, shoa, total_sismos, total_sismos_chile, puntaje, EVENTOS_M7, mejor_ev,
-                    )),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                ult_ev = eventos_validacion.iloc[0].to_dict() if not eventos_validacion.empty else None
-                pdf_chile = informes_pdf.generar_pdf_comparativa_chile(
-                    estacion=estacion_sel, config=config, puntaje=puntaje, estado=estado,
-                    nivel_alerta=nivel_alerta, b_val=b_val, insar=insar, cond=cond, shoa=shoa,
-                    total_sismos=total_sismos, total_sismos_chile=total_sismos_chile,
-                    mejor_ev=mejor_ev, mejor_match=mejor_match, consultado_usgs=consultado_usgs,
-                    eventos_m7=EVENTOS_M7, df_evidencia=df_evidencia, coincidencias=coincidencias,
-                    ultimo_sismo=ult_ev, ahora=pd.Timestamp(ahora_chile()), logo_path=LOGO_PATH,
-                )
-                nombre_pdf_ev = f"comparativa_chile_{estacion_sel[:24].replace(' ', '_')}.pdf"
-                informes_pdf.boton_descarga_pdf(
-                    pdf_chile,
-                    nombre_pdf_ev,
-                    boton_key=f"dl_pdf_chile_evidencia_{config['id']}",
-                    etiqueta="⬇️ Informe comparativo 14D Chile (PDF)",
-                )
+            with col_val_txt:
                 informe_validacion = generar_informe_validacion_texto(coincidencias)
                 st.download_button(
                     "Descargar validación TXT",
@@ -3486,44 +2047,33 @@ if not modo_simple:
                     "informe_validacion_post_evento_nazca.txt",
                     "text/plain",
                     use_container_width=True,
-                    key=f"dl_txt_validacion_{config['id']}",
                 )
-                with st.expander("Ver informe de validación TXT"):
-                    st.text(informe_validacion)
-            else:
-                informe_validacion = generar_informe_validacion_texto(coincidencias)
-                st.warning("Sube `nazca_informes_pdf.py` para ver informes PDF en pantalla.")
-                st.download_button(
-                    "Descargar informe de validación TXT",
-                    informe_validacion.encode("utf-8"),
-                    "informe_validacion_post_evento_nazca.txt",
-                    "text/plain",
-                    use_container_width=True,
-                )
-                with st.expander("Ver informe de validación"):
-                    st.text(informe_validacion)
+            with st.expander("👁️ Ver PDF en la página", expanded=True):
+                st.markdown(informes_pdf.html_vista_previa_pdf(pdf_chile), unsafe_allow_html=True)
+            with st.expander("Ver informe de validación TXT"):
+                st.text(informe_validacion)
+        else:
+            informe_validacion = generar_informe_validacion_texto(coincidencias)
+            st.warning("Sube `nazca_informes_pdf.py` para ver informes PDF en pantalla.")
+            st.download_button(
+                "Descargar informe de validación TXT",
+                informe_validacion.encode("utf-8"),
+                "informe_validacion_post_evento_nazca.txt",
+                "text/plain",
+                use_container_width=True,
+            )
+            with st.expander("Ver informe de validación"):
+                st.text(informe_validacion)
 
+if tab_mundo is not None:
     with tab_mundo:
         _render_mundo_lab_ui(
             admin_activo, ttl_seg, ttl_horas, nodo_mundo_sel,
             forzar_mundo, modo_sat, modo_demo, kp,
         )
 
-    if tab_pipeline is not None:
-        with tab_pipeline:
-            _render_pipeline_lab_ui(
-                admin_activo, estacion_sel, config,
-                nivel_alerta, puntaje, b_val, mejor_match, total_sismos, df_sismos_local,
-            )
-
-with tab_acerca:
-    render_tab_acerca_de(ttl_seg, ttl_horas, consultado_usgs, consultado_noaa)
-
-if not modo_simple:
-    st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
-    st.sidebar.metric("b-value regional", f"{b_val}")
-else:
-    st.sidebar.metric("Nivel actual", f"{nivel_alerta.get('color', '')} {nivel_alerta.get('nivel', '')}")
+st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
+st.sidebar.metric("b-value regional", f"{b_val}")
 
 st.markdown(
     """
@@ -3534,3 +2084,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+=======
+    st.dataframe(df_estatico_fijo, use_container_width=True, hide_index=True)
+>>>>>>> Stashed changes
