@@ -41,13 +41,33 @@ def _parse_fecha(texto: str) -> datetime | None:
     return None
 
 
+_COLUMNAS_TEXTO = (
+    "fecha_alerta", "estacion", "nivel", "patron_m7", "motivos", "resultado",
+    "fecha_evento", "mag_evento", "lugar_evento", "dias_anticipacion", "clave_bloque",
+)
+
+
+def _normalizar_tipos_auditoria(df: pd.DataFrame) -> pd.DataFrame:
+    """Evita float64 en celdas vacías del CSV — pandas no acepta texto en columnas float."""
+    if df.empty:
+        return df
+    for col in _COLUMNAS_TEXTO:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: "" if pd.isna(x) else str(x))
+    return df
+
+
 def leer_auditoria() -> pd.DataFrame:
     if not AUDITORIA_FILE.exists():
         return pd.DataFrame()
     try:
-        df = pd.read_csv(AUDITORIA_FILE, encoding="utf-8-sig")
+        df = pd.read_csv(AUDITORIA_FILE, encoding="utf-8-sig", dtype=str, keep_default_na=False)
     except (OSError, pd.errors.EmptyDataError, ValueError):
         return pd.DataFrame()
+    for col in ("lat", "lon", "puntaje", "match_m7", "sismos_locales_14d", "ventana_eval_dias"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = _normalizar_tipos_auditoria(df)
     if "fecha_alerta" in df.columns:
         df["fecha_alerta_dt"] = pd.to_datetime(df["fecha_alerta"], errors="coerce")
     return df
@@ -105,6 +125,7 @@ def registrar_alerta_semaforo(
         "clave_bloque": clave,
     }
     df = pd.concat([df, pd.DataFrame([fila])], ignore_index=True)
+    df = _normalizar_tipos_auditoria(df)
     _guardar_auditoria(df)
     return clave
 
@@ -143,6 +164,7 @@ def actualizar_resultados_auditoria(df_sismos: pd.DataFrame) -> int:
     df = leer_auditoria()
     if df.empty:
         return 0
+    df = _normalizar_tipos_auditoria(df.copy())
     ahora = ahora_chile()
     actualizados = 0
 
@@ -165,14 +187,14 @@ def actualizar_resultados_auditoria(df_sismos: pd.DataFrame) -> int:
         if not eventos.empty:
             ev = eventos.iloc[0]
             dias = (ev["fecha_dt"] - fecha_alerta).total_seconds() / 86400.0
-            df.at[idx, "resultado"] = "ACIERTO"
-            df.at[idx, "fecha_evento"] = ev["Fecha"]
-            df.at[idx, "mag_evento"] = ev["Magnitud"]
-            df.at[idx, "lugar_evento"] = ev["Lugar"]
-            df.at[idx, "dias_anticipacion"] = round(dias, 2)
+            df.loc[idx, "resultado"] = "ACIERTO"
+            df.loc[idx, "fecha_evento"] = str(ev["Fecha"])
+            df.loc[idx, "mag_evento"] = str(ev["Magnitud"])
+            df.loc[idx, "lugar_evento"] = str(ev.get("Lugar", ""))
+            df.loc[idx, "dias_anticipacion"] = str(round(dias, 2))
             actualizados += 1
         elif ahora >= limite:
-            df.at[idx, "resultado"] = "FALSO_POSITIVO"
+            df.loc[idx, "resultado"] = "FALSO_POSITIVO"
             actualizados += 1
 
     if actualizados:
