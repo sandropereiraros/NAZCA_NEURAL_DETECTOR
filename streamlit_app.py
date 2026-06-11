@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import random
 import base64
@@ -348,6 +349,24 @@ def borrar_cache(clave):
     ruta = _ruta_cache(clave)
     if os.path.exists(ruta):
         os.remove(ruta)
+
+
+def vaciar_cache_completo() -> int:
+    """Borra archivos y subcarpetas en .nazca_cache (p. ej. gnss_series_sa/)."""
+    if not os.path.isdir(CACHE_DIR):
+        return 0
+    borrados = 0
+    for nombre in os.listdir(CACHE_DIR):
+        ruta = os.path.join(CACHE_DIR, nombre)
+        try:
+            if os.path.isdir(ruta):
+                shutil.rmtree(ruta)
+            else:
+                os.remove(ruta)
+            borrados += 1
+        except OSError:
+            continue
+    return borrados
 
 
 def obtener_con_cache(clave, ttl_seg, fetch_fn, forzar=False):
@@ -2643,10 +2662,9 @@ elif admin_pin:
 if admin_activo:
     st.sidebar.markdown("#### Herramientas admin")
     if st.sidebar.button("Limpiar caché APIs", use_container_width=True):
-        if os.path.isdir(CACHE_DIR):
-            for f in os.listdir(CACHE_DIR):
-                os.remove(os.path.join(CACHE_DIR, f))
-        st.sidebar.success("Caché vaciada.")
+        n = vaciar_cache_completo()
+        st.cache_data.clear()
+        st.sidebar.success(f"Caché vaciada ({n} entradas).")
 
     forzar_sismos_14d = st.sidebar.button("Actualizar sismos 14D ahora", use_container_width=True)
     if forzar_sismos_14d:
