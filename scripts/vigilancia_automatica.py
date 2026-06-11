@@ -19,12 +19,24 @@ def main() -> int:
     args = parser.parse_args()
 
     secrets = alertas.leer_secrets_toml()
-    if not alertas.obtener_secret("TELEGRAM_TOKEN", secrets):
-        print("FALTA: TELEGRAM_TOKEN (secrets.toml o variable de entorno)")
+    token = alertas.obtener_secret("TELEGRAM_TOKEN", secrets)
+    chat_id = alertas.obtener_secret("TELEGRAM_CHAT_ID", secrets)
+    if not token:
+        print("FALTA: TELEGRAM_TOKEN")
+        print("GitHub Actions: Settings > Secrets and variables > Actions > TELEGRAM_TOKEN")
+        print("Local: .streamlit/secrets.toml o variable de entorno TELEGRAM_TOKEN")
+        return 1
+    if not args.dry_run and not chat_id:
+        print("FALTA: TELEGRAM_CHAT_ID")
+        print("GitHub Actions: agrega secret TELEGRAM_CHAT_ID (tu chat ID numerico)")
         return 1
 
     ttl_seg = max(3600, args.ttl_horas * 3600)
-    resumen = vigilancia.ejecutar_vigilancia(secrets=secrets, ttl_seg=ttl_seg, dry_run=args.dry_run)
+    try:
+        resumen = vigilancia.ejecutar_vigilancia(secrets=secrets, ttl_seg=ttl_seg, dry_run=args.dry_run)
+    except Exception as exc:
+        print(f"ERROR ejecutando vigilancia: {exc}")
+        return 1
 
     print(f"Vigilancia Chile | estaciones: {resumen['estaciones']} | alertas: {resumen['alertas_enviadas']}")
     print(f"USGS: {resumen['consultado_usgs']}")

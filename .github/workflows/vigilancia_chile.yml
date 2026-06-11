@@ -2,6 +2,7 @@ name: Vigilancia Chile NAZCA
 
 on:
   schedule:
+    # Cada 6 horas (UTC). Chile UTC-4: 00:00, 06:00, 12:00, 18:00 aprox.
     - cron: "0 */6 * * *"
   workflow_dispatch:
 
@@ -15,10 +16,30 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Restaurar cache NAZCA (cooldown Telegram + APIs)
+        uses: actions/cache@v4
+        with:
+          path: .nazca_cache
+          key: nazca-vigilancia-${{ github.run_id }}
+          restore-keys: |
+            nazca-vigilancia-
+
       - name: Instalar dependencias
         run: pip install pandas numpy requests
 
-      - name: Ejecutar vigilancia automatica
+      - name: Verificar secrets de Telegram
+        run: |
+          if [ -z "${{ secrets.TELEGRAM_TOKEN }}" ]; then
+            echo "::error::Falta TELEGRAM_TOKEN. Ve a Settings > Secrets and variables > Actions y crealo."
+            exit 1
+          fi
+          if [ -z "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+            echo "::error::Falta TELEGRAM_CHAT_ID. Agrega tu chat ID numerico en Actions secrets."
+            exit 1
+          fi
+          echo "Secrets Telegram: OK"
+
+      - name: Ejecutar vigilancia automatica (7 estaciones Chile)
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

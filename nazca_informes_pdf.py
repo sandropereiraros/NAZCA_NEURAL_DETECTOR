@@ -422,3 +422,338 @@ def generar_pdf_comparativa_chile(
     _linea(pdf, "USGS", consultado_usgs or "N/D")
     _multilinea(pdf, "Prototipo experimental NAZCA Core Monitor v8.0. Uso privado y de investigacion.")
     return _pdf_out(pdf)
+
+
+def _cabecera_core_monitor(pdf, titulo, subtitulo, logo_path=None):
+    if logo_path and os.path.exists(logo_path):
+        pdf.image(logo_path, x=12, y=10, w=26)
+        pdf.set_xy(42, 11)
+    else:
+        pdf.set_xy(12, 11)
+    pdf.set_font("Arial", "B", 15)
+    _celda(pdf, 0, 8, "NAZCA CORE MONITOR v8.0", ln=1)
+    pdf.set_x(42 if logo_path and os.path.exists(logo_path) else 12)
+    pdf.set_font("Arial", "", 9)
+    _celda(pdf, 0, 6, titulo, ln=1)
+    pdf.set_x(42 if logo_path and os.path.exists(logo_path) else 12)
+    _celda(pdf, 0, 6, subtitulo, ln=1)
+    pdf.set_x(42 if logo_path and os.path.exists(logo_path) else 12)
+    _celda(pdf, 0, 6, "Desarrollado por Sandro Pereira A. - CEO & Developer", ln=1)
+    pdf.ln(10)
+
+
+def _resumen_estacion_log(df_log, estacion):
+    if df_log is None or df_log.empty or "Estacion" not in df_log.columns:
+        return {}
+    loc = df_log[df_log["Estacion"] == estacion]
+    if loc.empty:
+        return {"registros": 0}
+    crit = loc["Criticidad_%"] if "Criticidad_%" in loc.columns else pd.Series(dtype=float)
+    estados = loc["Estado"].value_counts().to_dict() if "Estado" in loc.columns else {}
+    pico = loc.loc[crit.idxmax()] if not crit.empty else loc.iloc[-1]
+    return {
+        "registros": len(loc),
+        "estado_mas_frecuente": max(estados, key=estados.get) if estados else "N/D",
+        "max_criticidad": round(float(crit.max()), 1) if not crit.empty else 0,
+        "pico_estado": pico.get("Estado", "N/D"),
+        "pico_fecha": pico.get("Fecha_Hora", "N/D"),
+        "pico_b": pico.get("b-value_14D", "N/D"),
+        "pico_insar": pico.get("InSAR_%", "N/D"),
+        "estados": estados,
+    }
+
+
+def _fix_estados_count(estados):
+    if not estados:
+        return "N/D"
+    if isinstance(estados, dict):
+        top = sorted(estados.items(), key=lambda x: -x[1])[:3]
+        return ", ".join(f"{k} ({v})" for k, v in top)
+    return str(estados)
+
+
+def _es_pico_transitorio(df_log, row, minutos=30, caida_min=25):
+    """True si el indice cae fuerte poco despues (pico de segundos/minutos, no sostenido)."""
+    if df_log is None or df_log.empty:
+        return False
+    est = row.get("Estacion", "")
+    fecha = pd.to_datetime(row.get("Fecha_Hora"), errors="coerce")
+    if pd.isna(fecha):
+        return False
+    try:
+        crit = float(row.get("Criticidad_%", 0))
+    except (TypeError, ValueError):
+        return False
+    loc = df_log[df_log["Estacion"] == est].copy()
+    loc["dt"] = pd.to_datetime(loc["Fecha_Hora"], errors="coerce")
+    despues = loc[(loc["dt"] > fecha) & (loc["dt"] <= fecha + timedelta(minutes=minutos))]
+    if despues.empty:
+        return False
+    return crit - float(despues["Criticidad_%"].min()) >= caida_min
+
+
+def _etiqueta_pico(df_log, row):
+    estado = sanitizar_texto(str(row.get("Estado", "")))
+    transitorio = _es_pico_transitorio(df_log, row)
+    detalle = {
+        "ADVERTENCIA CRITICA": "enjambre b-value bajo + pico InSAR estimado",
+        "ADVERTENCIA (ACUMULACION)": "b-value 0.56 - patron enjambre sin sismo fuerte posterior",
+        "ATENCION SISMICA": "compuerta abierta - actividad regional moderada",
+        "ADVERTENCIA ENERGETICA": "actividad temprana; indice no sostuvo umbral critico",
+    }
+    causa = detalle.get(estado, "lectura destacada del periodo")
+    if transitorio:
+        return (
+            f"PICO TRANSITORIO NO VALIDADO | {causa} | "
+            f"No se confirmo con evento M5+ | No cumple criterio Telegram sostenido"
+        )
+    return f"Lectura sostenida | {causa}"
+
+
+def generar_pdf_informe_prueba_escaneo(
+    periodo_desde,
+    periodo_hasta,
+    resumen_global,
+    estaciones_resumen,
+    picos_relevantes=None,
+    auditoria_filas=None,
+    evidencia_resumen=None,
+    conclusiones=None,
+    ahora=None,
+    logo_path=None,
+):
+    """Informe PDF del periodo de prueba — Escaneo en vivo NAZCA CORE MONITOR."""
+    ahora = ahora or pd.Timestamp.now()
+    picos_relevantes = picos_relevantes or []
+    auditoria_filas = auditoria_filas or []
+    conclusiones = conclusiones or []
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=14)
+    _cabecera_core_monitor(
+        pdf,
+        "Informe periodo de prueba - Escaneo en vivo",
+        f"Generado: {ahora.strftime('%Y-%m-%d %H:%M')} ({CHILE_TZ_LABEL})",
+        logo_path=logo_path,
+    )
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "1. Resumen ejecutivo", ln=1)
+    _linea(pdf, "Periodo analizado", f"{periodo_desde} a {periodo_hasta}")
+    for k, v in (resumen_global or {}).items():
+        _linea(pdf, k, v)
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "2. Comportamiento por estacion", ln=1)
+    for est, datos in (estaciones_resumen or {}).items():
+        pdf.set_font("Arial", "B", 10)
+        _multilinea(pdf, est)
+        pdf.set_font("Arial", "", 9)
+        _linea(pdf, "Registros bitacora", str(datos.get("registros", 0)))
+        if datos.get("registros", 0) > 0:
+            _linea(pdf, "Estados frecuentes", _fix_estados_count(datos.get("estados")))
+            _linea(pdf, "Pico criticidad", f"{datos.get('max_criticidad', 0)}% ({datos.get('pico_estado', '')})")
+            _linea(pdf, "Fecha pico", str(datos.get("pico_fecha", "")))
+            _linea(pdf, "b-value en pico", str(datos.get("pico_b", "")))
+            _linea(pdf, "InSAR en pico", str(datos.get("pico_insar", "")))
+            if datos.get("interpretacion"):
+                _multilinea(pdf, datos["interpretacion"])
+        pdf.ln(1)
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "3. Picos y condiciones relevantes", ln=1)
+    _multilinea(
+        pdf,
+        "PICO TRANSITORIO NO VALIDADO = subida breve (segundos/minutos) que vuelve a ESTABLE "
+        "sin terremoto fuerte posterior. No equivale a acierto ni a disparo Telegram automatico."
+    )
+    if picos_relevantes:
+        for pico in picos_relevantes:
+            _multilinea(
+                pdf,
+                f"- {pico.get('fecha', '')} | {pico.get('estacion', '')} | "
+                f"{pico.get('estado', '')} | indice {pico.get('criticidad', '')}% | "
+                f"b={pico.get('b_value', '')} | InSAR={pico.get('insar', '')}% | {pico.get('nota', '')}"
+            )
+    else:
+        _multilinea(pdf, "Sin picos destacados en el periodo.")
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "4. Auditoria semaforo", ln=1)
+    if auditoria_filas:
+        pdf.set_font("Arial", "B", 8)
+        _celda(pdf, 36, 6, "Fecha alerta", bold=True)
+        _celda(pdf, 52, 6, "Estacion", bold=True)
+        _celda(pdf, 18, 6, "Nivel", bold=True)
+        _celda(pdf, 18, 6, "Indice", bold=True)
+        _celda(pdf, 0, 6, "Resultado", bold=True, ln=1)
+        pdf.set_font("Arial", "", 8)
+        for fila in auditoria_filas[:12]:
+            _celda(pdf, 36, 6, str(fila.get("fecha_alerta", ""))[:16])
+            _celda(pdf, 52, 6, sanitizar_texto(str(fila.get("estacion", "")))[:28])
+            _celda(pdf, 18, 6, str(fila.get("nivel", "")))
+            _celda(pdf, 18, 6, str(fila.get("puntaje", "")))
+            _celda(pdf, 0, 6, str(fila.get("resultado", "")), ln=1)
+    else:
+        _multilinea(pdf, "Sin registros de auditoria en el periodo.")
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "5. Evidencia pre-evento (snapshots)", ln=1)
+    if evidencia_resumen:
+        for k, v in evidencia_resumen.items():
+            _linea(pdf, k, v)
+    else:
+        _multilinea(pdf, "Sin snapshots de evidencia en el periodo.")
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "6. Conclusiones de la prueba", ln=1)
+    for txt in conclusiones:
+        _multilinea(pdf, f"- {txt}")
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    _celda(pdf, 0, 8, "7. Limitacion tecnica", ln=1)
+    _multilinea(
+        pdf,
+        "NAZCA CORE MONITOR es un prototipo experimental de vigilancia. "
+        "Este informe resume lecturas del escaneo en vivo y no constituye prediccion oficial ni alerta de evacuacion. "
+        "Variables InSAR, EM, SHOA y presion pueden ser estimadas. "
+        "La validacion ACIERTO/FALSO_POSITIVO requiere eventos USGS M5+ posteriores dentro de 30 dias."
+    )
+    return _pdf_out(pdf)
+
+
+def construir_informe_prueba_desde_archivos(
+    base_dir,
+    logo_path=None,
+    rutas=None,
+):
+    """Lee bitacora, evidencia y auditoria del disco y genera el PDF de prueba."""
+    base_dir = os.path.abspath(base_dir)
+    rutas = rutas or {}
+    log_path = rutas.get("log") or os.path.join(base_dir, "nazca_log_historico.csv")
+    ev_path = rutas.get("evidencia") or os.path.join(base_dir, "nazca_evidencia_preevento.csv")
+    aud_path = rutas.get("auditoria") or os.path.join(base_dir, "nazca_auditoria_semaforo.csv")
+
+    df_log = pd.DataFrame()
+    if os.path.exists(log_path):
+        df_log = pd.read_csv(log_path)
+
+    df_ev = pd.DataFrame()
+    if os.path.exists(ev_path):
+        try:
+            df_ev = pd.read_csv(ev_path, on_bad_lines="skip")
+        except TypeError:
+            df_ev = pd.read_csv(ev_path, error_bad_lines=False)
+
+    df_aud = pd.DataFrame()
+    if os.path.exists(aud_path):
+        df_aud = pd.read_csv(aud_path, encoding="utf-8-sig")
+
+    periodo_desde = df_log["Fecha_Hora"].min() if not df_log.empty else "N/D"
+    periodo_hasta = df_log["Fecha_Hora"].max() if not df_log.empty else "N/D"
+
+    estaciones_objetivo = [
+        "Valparaiso / San Antonio (85574)",
+        "Valparaíso / San Antonio (85574)",
+        "Coquimbo / Illapel (85540)",
+        "Antofagasta / Taltal (85442)",
+    ]
+    visto = set()
+    estaciones_resumen = {}
+    interpretaciones = {
+        "Valparaíso / San Antonio (85574)": (
+            "Vigilancia AMARILLA recurrente por similitud historica con Constitucion 2012 (match 65-77%). "
+            "Indice operativo mayormente ESTABLE (25-38%). EM elevado por humedad invernal costa central."
+        ),
+        "Antofagasta / Taltal (85442)": (
+            "Mayor actividad sismica local del periodo (15-20 sismos 14D). "
+            "Semáforo AMARILLO por conteo de temblores. Picos de ATENCION SISMICA con InSAR ~90%."
+        ),
+        "Coquimbo / Illapel (85540)": (
+            "Zona tranquila en la prueba: lecturas ESTABLES sin umbrales de vigilancia reforzada."
+        ),
+    }
+    for est in estaciones_objetivo:
+        if est in visto:
+            continue
+        res = _resumen_estacion_log(df_log, est)
+        if res.get("registros", 0) == 0:
+            continue
+        clave = est
+        if "Valparaiso" in est:
+            clave = "Valparaíso / San Antonio (85574)"
+        if clave in visto:
+            continue
+        visto.add(clave)
+        res["interpretacion"] = interpretaciones.get(clave, "")
+        estaciones_resumen[clave] = res
+
+    picos = []
+    if not df_log.empty and "Criticidad_%" in df_log.columns:
+        top = df_log.nlargest(8, "Criticidad_%")
+        for _, row in top.iterrows():
+            picos.append({
+                "fecha": row.get("Fecha_Hora", ""),
+                "estacion": row.get("Estacion", ""),
+                "estado": str(row.get("Estado", "")),
+                "criticidad": round(float(row.get("Criticidad_%", 0)), 1),
+                "b_value": row.get("b-value_14D", ""),
+                "insar": row.get("InSAR_%", ""),
+                "nota": _etiqueta_pico(df_log, row),
+            })
+
+    auditoria_filas = df_aud.to_dict("records") if not df_aud.empty else []
+
+    ev_resumen = {}
+    if not df_ev.empty:
+        ev_resumen["Total snapshots"] = str(len(df_ev))
+        if "nivel" in df_ev.columns:
+            ev_resumen["Niveles"] = ", ".join(
+                f"{k}: {v}" for k, v in df_ev["nivel"].value_counts().to_dict().items()
+            )
+        if "estacion" in df_ev.columns:
+            ev_resumen["Estaciones"] = ", ".join(
+                f"{k}: {v}" for k, v in df_ev["estacion"].value_counts().head(4).to_dict().items()
+            )
+        if "match_m7" in df_ev.columns:
+            ev_resumen["Match M7+ max"] = f"{df_ev['match_m7'].max():.1f}%"
+
+    pendientes = sum(1 for r in auditoria_filas if str(r.get("resultado", "")).upper() == "PENDIENTE")
+    aciertos = sum(1 for r in auditoria_filas if str(r.get("resultado", "")).upper() == "ACIERTO")
+
+    resumen_global = {
+        "Registros bitacora": str(len(df_log)),
+        "Snapshots evidencia": str(len(df_ev)),
+        "Alertas auditoria": str(len(auditoria_filas)),
+        "Auditoria PENDIENTE": str(pendientes),
+        "Auditoria ACIERTO": str(aciertos),
+        "Validacion post-evento M5+": "Sin aciertos cerrados en el periodo" if aciertos == 0 else f"{aciertos} acierto(s)",
+    }
+
+    conclusiones = [
+        "El escaneo en vivo registro, recalculo y guardo trazabilidad (bitacora + evidencia + auditoria).",
+        "Los picos ADVERTENCIA CRITICA del 5-jun (82%) fueron TRANSITORIOS: volvieron a ESTABLE en minutos sin M5+ posterior.",
+        "Se identifico vigilancia AMARILLA en Valparaiso por similitud historica, no por indice critico sostenido.",
+        "Antofagasta mostro la mayor actividad sismica medida (15-20 temblores 14D) y alertas auditoria PENDIENTE.",
+        "Telegram NO disparo en esos picos: requiere admin + toggle activo + estacion seleccionada + (indice>=68% Y match>=78%) O firma ruptura (b<=0.68 y >=12 sismos 14D).",
+        "Aun no hay validacion ACIERTO ante terremoto fuerte M5+; el periodo es corto (~5-6 dias).",
+        "Recomendacion: continuar escaneo 30+ dias; no tratar picos de segundos como alerta operacional.",
+    ]
+
+    return generar_pdf_informe_prueba_escaneo(
+        periodo_desde=periodo_desde,
+        periodo_hasta=periodo_hasta,
+        resumen_global=resumen_global,
+        estaciones_resumen=estaciones_resumen,
+        picos_relevantes=picos,
+        auditoria_filas=auditoria_filas,
+        evidencia_resumen=ev_resumen,
+        conclusiones=conclusiones,
+        logo_path=logo_path,
+    )

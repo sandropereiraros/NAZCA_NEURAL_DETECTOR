@@ -329,7 +329,12 @@ def evaluar_estacion(estacion, config, df_sismos, kp, consultado_usgs, ttl_seg):
     return resultado
 
 
-def ejecutar_vigilancia(secrets: dict | None = None, ttl_seg: int = TTL_SEG_DEFAULT, dry_run: bool = False):
+def ejecutar_vigilancia(
+    secrets: dict | None = None,
+    ttl_seg: int = TTL_SEG_DEFAULT,
+    dry_run: bool = False,
+    solo_telegram: bool = False,
+):
     secrets = secrets or alertas.leer_secrets_toml()
     filas, consultado_usgs, _ = obtener_con_cache(
         f"sismos_chile_14d_{ttl_seg}",
@@ -345,7 +350,7 @@ def ejecutar_vigilancia(secrets: dict | None = None, ttl_seg: int = TTL_SEG_DEFA
     bloque_aud = int(ahora_chile().timestamp() // ttl_seg)
     for estacion, config in ESTACIONES_CONFIG.items():
         ev = evaluar_estacion(estacion, config, df_sismos, kp, consultado_usgs, ttl_seg)
-        if auditoria and not dry_run:
+        if auditoria and not dry_run and not solo_telegram:
             nivel_nom = (ev.get("nivel") or {}).get("nivel", "VERDE")
             clave_aud = f"{estacion}_{bloque_aud}_{nivel_nom}"
             auditoria.registrar_alerta_semaforo(
@@ -406,7 +411,7 @@ def ejecutar_vigilancia(secrets: dict | None = None, ttl_seg: int = TTL_SEG_DEFA
             alertas_enviadas += 1
         ev["accion"] = f"admin={ok_admin} subs={subs_ok} err={subs_err}"
 
-    if auditoria and not dry_run:
+    if auditoria and not dry_run and not solo_telegram:
         auditoria.actualizar_resultados_auditoria(df_sismos)
 
     return {

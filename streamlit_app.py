@@ -48,6 +48,7 @@ auditoria_mod, _err_auditoria = _cargar_modulo_local("nazca_auditoria_semaforo",
 forecast_mod, _err_forecast = _cargar_modulo_local("nazca_forecast_sismico", "nazca_forecast_sismico.py")
 pipeline_lab, _err_pipeline = _cargar_modulo_local("nazca_pipeline_lab", "nazca_pipeline_lab.py")
 alertas, _err_alertas = _cargar_modulo_local("nazca_alertas", "nazca_alertas.py")
+vigilancia_mod, _err_vigilancia = _cargar_modulo_local("nazca_vigilancia_core", "nazca_vigilancia_core.py")
 
 # ==============================================================================
 # CONFIGURACIÓN
@@ -2703,25 +2704,31 @@ canal = "SATELITAL LEO" if modo_sat else "TERRESTRE"
 
 st.sidebar.markdown("---")
 if admin_activo:
+    _tg_ok = telegram_configurado()
     if "telegram_vigilancia_activa" not in st.session_state:
-        st.session_state["telegram_vigilancia_activa"] = False
+        st.session_state["telegram_vigilancia_activa"] = _tg_ok
     telegram_activo = st.sidebar.toggle(
         "Telegram vigilancia Chile",
         key="telegram_vigilancia_activa",
+        help="Activo por defecto si hay secrets. Solo desactiva para pruebas locales.",
     )
 else:
     telegram_activo = False
 if telegram_activo:
     if telegram_configurado():
-        st.sidebar.success("Telegram configurado.")
+        st.sidebar.success("Telegram vigilancia: ACTIVO (7 nodos cuando abres la app).")
         st.sidebar.caption(
-            f"Disparo: patron M7+ (≥{UMBRAL_NOTIFICACION_TELEGRAM}% / match ≥{UMBRAL_MATCH_M7_TELEGRAM}%) "
-            f"o firma ruptura (b≤{alertas.UMBRAL_B_RUPTURA}, ≥{alertas.MIN_SISMOS_RUPTURA} sismos)."
+            f"Disparo solo emergencia potencial: patron M7+ (indice ≥{UMBRAL_NOTIFICACION_TELEGRAM}% "
+            f"y match ≥{UMBRAL_MATCH_M7_TELEGRAM}%) o firma ruptura "
+            f"(b≤{alertas.UMBRAL_B_RUPTURA}, ≥{alertas.MIN_SISMOS_RUPTURA} sismos 14D)."
         )
     else:
         st.sidebar.warning("Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en secrets.")
 if admin_activo:
-    st.sidebar.caption("Vigilancia 24/7: GitHub Actions cada 6 h (scripts/vigilancia_automatica.py).")
+    st.sidebar.caption(
+        "24/7 real: GitHub Actions → Settings → Secrets → TELEGRAM_TOKEN + TELEGRAM_CHAT_ID "
+        "→ workflow Vigilancia Chile (cada 6 h, 7 estaciones)."
+    )
 
 _mundo_sidebar = bool(mundo_lab and mundo_lab.MODULO_MUNDO_ACTIVO and admin_activo)
 if _mundo_sidebar:
@@ -2876,7 +2883,38 @@ if not modo_demo and st.session_state.get("ultima_evidencia") != clave_evidencia
     st.session_state["ultima_evidencia"] = clave_evidencia
 
 telegram_estado = "Telegram desactivado."
-if telegram_activo:
+if telegram_activo and not telegram_configurado():
+    telegram_estado = "Falta TELEGRAM_TOKEN / TELEGRAM_CHAT_ID en secrets."
+elif telegram_activo and modo_demo:
+    telegram_estado = "Modo demo: envio automatico desactivado. Usa el boton de demo en la pestana VIVO."
+elif telegram_activo and vigilancia_mod:
+    clave_vig_tg = f"vigilancia_tg_{int(ahora_chile().timestamp() // ttl_seg)}_{ttl_seg}"
+    if st.session_state.get("ultima_vigilancia_tg") != clave_vig_tg:
+        try:
+            res_vig = vigilancia_mod.ejecutar_vigilancia(
+                secrets=alertas.leer_secrets_toml(),
+                ttl_seg=ttl_seg,
+                dry_run=False,
+                solo_telegram=True,
+            )
+            st.session_state["ultima_vigilancia_tg"] = clave_vig_tg
+            alertas_vig = [ev for ev in res_vig.get("resultados", []) if ev.get("disparar")]
+            if alertas_vig:
+                nombres = ", ".join(ev["estacion"].split(" (")[0] for ev in alertas_vig[:3])
+                telegram_estado = (
+                    f"Vigilancia 7 nodos: {res_vig.get('alertas_enviadas', 0)} alerta(s) enviada(s) "
+                    f"({nombres})."
+                )
+            else:
+                telegram_estado = (
+                    f"Vigilancia 7 nodos OK | sin disparo (criterios emergencia no cumplidos). "
+                    f"USGS: {res_vig.get('consultado_usgs', 'N/D')}"
+                )
+        except Exception as exc:
+            telegram_estado = f"Error vigilancia Telegram: {exc}"
+    else:
+        telegram_estado = "Vigilancia 7 nodos ya evaluada en este bloque horario."
+elif telegram_activo:
     puede_notificar, detalle_notificacion, motivo_telegram = debe_notificar_telegram(
         estacion_sel, mejor_ev, puntaje, mejor_match, modo_demo, b_val, total_sismos, insar
     )
@@ -2894,11 +2932,7 @@ if telegram_activo:
             telegram_estado = f"{telegram_estado} {estado_suscriptores}"
             st.session_state[detalle_notificacion] = ahora_chile()
     else:
-        telegram_estado = (
-            "Modo demo: envio automatico desactivado. Usa el boton de demo en la pestana VIVO."
-            if modo_demo
-            else detalle_notificacion
-        )
+        telegram_estado = detalle_notificacion
 
 # ==============================================================================
 # INTERFAZ
