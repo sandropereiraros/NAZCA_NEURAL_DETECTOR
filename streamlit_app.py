@@ -15,7 +15,7 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-12-v8"
+APP_BUILD = "2026-06-12-v9"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1080,6 +1080,29 @@ def render_probabilidades_escaneo_vivo(estacion_sel: str, df_sismos_local: pd.Da
             st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
 
 
+def _mostrar_vista_previa_pdf(pdf_bytes, nombre_archivo: str, key: str) -> None:
+    """Vista previa PDF compatible con nazca_informes_pdf (sin iframe en Cloud)."""
+    if not pdf_bytes:
+        st.warning("No se pudo generar el informe PDF.")
+        return
+    if not informes_pdf:
+        st.caption("Descarga el PDF con el botón superior.")
+        return
+    vista = getattr(informes_pdf, "render_vista_previa_pdf", None)
+    if vista:
+        vista(pdf_bytes, nombre_archivo, key=key)
+        return
+    html_vista = getattr(informes_pdf, "html_vista_previa_pdf", None)
+    if html_vista:
+        st.markdown(html_vista(pdf_bytes), unsafe_allow_html=True)
+        return
+    boton = getattr(informes_pdf, "boton_descarga_pdf", None)
+    if boton:
+        boton(pdf_bytes, nombre_archivo, boton_key=key)
+        return
+    st.caption("Descarga el PDF con el botón superior.")
+
+
 def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
     st.markdown("### 🌍 NAZCA MUNDO LAB (inline v4)")
     st.success(f"Build **{APP_BUILD}** — Catálogo mundial SIN Chile (Maule/Iquique solo en pestaña nacional).")
@@ -1994,7 +2017,11 @@ with tab_vivo:
                 use_container_width=True,
             )
             with st.expander("👁️ Ver PDF comparativo en la página", expanded=False):
-                st.markdown(informes_pdf.html_vista_previa_pdf(pdf_comp_chile), unsafe_allow_html=True)
+                _mostrar_vista_previa_pdf(
+                    pdf_comp_chile,
+                    f"comparativa_chile_{config['id']}.pdf",
+                    key=f"pdf_previa_vivo_{config['id']}",
+                )
         else:
             st.caption("Sube `nazca_informes_pdf.py` para activar comparativa PDF.")
 
@@ -2244,8 +2271,12 @@ with tab_evidencia:
                     "text/plain",
                     use_container_width=True,
                 )
-            with st.expander("👁️ Ver PDF en la página", expanded=True):
-                st.markdown(informes_pdf.html_vista_previa_pdf(pdf_chile), unsafe_allow_html=True)
+            with st.expander("👁️ Ver PDF en la página", expanded=False):
+                _mostrar_vista_previa_pdf(
+                    pdf_chile,
+                    f"comparativa_chile_{estacion_sel[:24].replace(' ', '_')}.pdf",
+                    key=f"pdf_previa_evidencia_{config['id']}",
+                )
             with st.expander("Ver informe de validación TXT"):
                 st.text(informe_validacion)
         else:
