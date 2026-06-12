@@ -1,0 +1,56 @@
+{
+  "registro": "NAZCA — primer acierto documentado (pronóstico probabilístico)",
+  "version": "1.0",
+  "generado": "2026-06-12",
+  "evento": {
+    "fecha_hora_chile": "2026-06-11 01:19:44",
+    "fecha_hora_utc": "2026-06-11T05:19:44Z",
+    "magnitud_usgs": 5.2,
+    "magnitud_reportada_usuario": 5.3,
+    "lugar": "117 km al NO de Vallenar, Chile (USGS)",
+    "lat": -27.84,
+    "lon": -71.62,
+    "profundidad_km": null,
+    "fuente": "USGS FDSN",
+    "url_usgs": "https://earthquake.usgs.gov/earthquakes/eventpage/"
+  },
+  "pronostico_nazca": {
+    "fecha_consulta_aprox": "2026-06-08 a 2026-06-10",
+    "ventana_dias": 5,
+    "pregunta": "Probabilidad de al menos un sismo M≥5 en los próximos 5 días",
+    "sistema": "PIPELINE LAB (S3) + referencia GR/Poisson (S2)",
+    "estaciones_relevantes": [
+      {
+        "nombre": "Coquimbo / Illapel (85540)",
+        "distancia_evento_km": 236,
+        "dentro_radio_350_km": true,
+        "prob_m5_5d_calibrada_pct": 18.18,
+        "prob_poisson_ref_pct": 47.27,
+        "senal": "Zona geográficamente más cercana al epicentro"
+      },
+      {
+        "nombre": "Antofagasta / Taltal (85442)",
+        "distancia_evento_km": 482,
+        "dentro_radio_350_km": false,
+        "prob_m5_5d_calibrada_pct": 18.18,
+        "prob_poisson_ref_pct": 71.35,
+        "senal": "Mayor actividad estadística en el norte grande"
+      },
+      {
+        "nombre": "Arica / Iquique (85400)",
+        "distancia_evento_km": 1050,
+        "dentro_radio_350_km": false,
+        "prob_m5_5d_calibrada_pct": 18.18,
+        "prob_poisson_ref_pct": 24.42,
+        "senal": "Norte extremo — fuera del epicentro de este evento"
+      }
+    ]
+  },
+  "evaluacion": {
+    "acierto_magnitud": true,
+    "acierto_ventana_5d": true,
+    "acierto_zona_aproximada": "parcial — norte de Chile / Atacama, nodo Coquimbo dentro de radio",
+    "prediccion_determinista": false,
+    "nota": "Un caso favorable no certifica el modelo; se registra como primera coincidencia operativa."
+  }
+}

@@ -15,7 +15,7 @@ import requests
 import streamlit as st
 from fpdf import FPDF
 
-APP_BUILD = "2026-06-08-v6"
+APP_BUILD = "2026-06-12-v8"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -998,6 +998,88 @@ def _fetch_usgs_global_inline():
     return pd.DataFrame()
 
 
+def _leer_estado_pipeline() -> dict:
+    ruta = os.path.join(_BASE_DIR, "data", "pipeline_lab", "estado_pipeline.json")
+    if not os.path.exists(ruta):
+        return {}
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def render_probabilidades_escaneo_vivo(estacion_sel: str, df_sismos_local: pd.DataFrame) -> None:
+    """Panel simple: probabilidades PIPELINE + tendencia GR en Escaneo en vivo."""
+    estado_pl = _leer_estado_pipeline()
+    inf = (estado_pl.get("inferencias") or {}).get(estacion_sel)
+    fc = None
+    if forecast_mod and df_sismos_local is not None and not df_sismos_local.empty:
+        try:
+            fc = forecast_mod.resumen_forecast_sismico(df_sismos_local)
+        except Exception:
+            fc = None
+
+    if not inf and not fc:
+        st.info(
+            "Probabilidades ML/GR: sin datos aún. El pipeline corre en segundo plano; "
+            "actualiza con `python scripts/pipeline/ejecutar_pipeline.py --todo`."
+        )
+        return
+
+    st.markdown("#### Probabilidades (zona seleccionada)")
+    st.caption(
+        "Lectura orientativa — **no** es predicción de día ni lugar exacto. "
+        "Pregunta: ¿hay chance de un **M≥5 en los próximos 5 días** cerca de esta estación?"
+    )
+
+    cols = st.columns(3)
+    if inf:
+        prob = inf.get("prob_m5_5d_pct")
+        poi = inf.get("prob_poisson_pct")
+        cols[0].metric(
+            "Chance M≥5 (5 días)",
+            f"{prob}%" if prob is not None else "—",
+            help="Modelo calibrado PIPELINE LAB (S3)",
+        )
+        cols[1].metric(
+            "Actividad estadística",
+            f"{poi}%" if poi is not None else "—",
+            help="Referencia GR/Poisson (S2)",
+        )
+        cols[2].metric(
+            "Último cálculo pipeline",
+            (estado_pl.get("actualizado") or "—")[:16],
+        )
+    elif fc:
+        cols[0].metric("Chance M≥5 (5 días)", "—", help="Pipeline sin inferencia para esta zona")
+
+    if fc:
+        tend = (fc.get("tendencia") or {}).get("direccion", "—")
+        flecha = fc.get("flecha", "·")
+        esperado = fc.get("esperado_m5_7d")
+        estilo = (fc.get("tendencia") or {}).get("estilo") or {}
+        color = estilo.get("color", "#58a6ff")
+        st.markdown(
+            f"<div style='border-left:4px solid {color};padding:8px 12px;margin-top:8px;'>"
+            f"<b>Tendencia sísmica (GR/Omori):</b> {flecha} {tend}"
+            + (f" · actividad M≥5 esperada ~{esperado:.2f} en 7d" if esperado is not None else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    if estado_pl.get("inferencias"):
+        with st.expander("Ver todas las zonas Chile (PIPELINE)"):
+            filas = []
+            for est, data in estado_pl["inferencias"].items():
+                filas.append({
+                    "Zona": est.split(" (")[0],
+                    "P M≥5 (5d) %": data.get("prob_m5_5d_pct"),
+                    "Poisson ref. %": data.get("prob_poisson_pct"),
+                })
+            st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+
+
 def _render_mundo_lab_inline(admin_activo, nodo_sel, ttl_seg, modo_demo):
     st.markdown("### 🌍 NAZCA MUNDO LAB (inline v4)")
     st.success(f"Build **{APP_BUILD}** — Catálogo mundial SIN Chile (Maule/Iquique solo en pestaña nacional).")
@@ -1437,12 +1519,18 @@ admin_activo = bool(admin_esperado and admin_pin == admin_esperado)
 if admin_activo:
     st.sidebar.success("Modo admin activo.")
     _ver_mundo = getattr(mundo_lab, "MUNDO_LAB_VERSION", None) if mundo_lab else None
+    _ver_pipeline = (
+        getattr(pipeline_lab, "PIPELINE_LAB_VERSION", None) if pipeline_lab else None
+    )
     st.sidebar.caption(
         f"Build app: **{APP_BUILD}** · MUNDO: **{_ver_mundo or 'NO'}** · "
+        f"PIPELINE: **{_ver_pipeline or 'NO'}** · "
         f"Mapa: **{'OK' if mapa_tect else 'NO'}** · PDF: **{'OK' if informes_pdf else 'NO'}**"
     )
     if _err_mundo:
         st.sidebar.error(_err_mundo)
+    if _err_pipeline:
+        st.sidebar.error(_err_pipeline)
     if _err_mapa:
         st.sidebar.warning(_err_mapa)
     if _err_informes:
@@ -1528,14 +1616,40 @@ _default_mundo = (
     mundo_lab.nodo_por_defecto() if _mundo_sidebar and mundo_lab
     else "Filipinas · Mindanao"
 )
-if "nodo_mundo_sel" not in st.session_state and _default_mundo:
-    st.session_state["nodo_mundo_sel"] = _default_mundo
+
+
+def _indice_seguro_lista(opciones: list, valor, default) -> int:
+    if not opciones:
+        return 0
+    if valor in opciones:
+        return opciones.index(valor)
+    if default in opciones:
+        return opciones.index(default)
+    return 0
+
+
+def _normalizar_nodo_mundo(opciones: list, valor, default):
+    if not opciones:
+        return valor or default
+    if valor in opciones:
+        return valor
+    if default in opciones:
+        return default
+    return opciones[0]
+
+
+_nodo_guardado = _normalizar_nodo_mundo(
+    _nodos_mundo,
+    st.session_state.get("nodo_mundo_sel"),
+    _default_mundo,
+)
+st.session_state["nodo_mundo_sel"] = _nodo_guardado
 
 if red_operativa == "Mundo LAB" and _mundo_sidebar:
     nodo_mundo_sel = st.sidebar.selectbox(
         "Nodo global CORE NETWORK",
         _nodos_mundo,
-        index=_nodos_mundo.index(st.session_state.get("nodo_mundo_sel", _default_mundo)),
+        index=_indice_seguro_lista(_nodos_mundo, _nodo_guardado, _default_mundo),
     )
     st.session_state["nodo_mundo_sel"] = nodo_mundo_sel
     estacion_sel = list(ESTACIONES_CONFIG.keys())[3]
@@ -1685,9 +1799,15 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+_ver_pl_header = (
+    getattr(pipeline_lab, "PIPELINE_LAB_VERSION", None)
+    if pipeline_lab and getattr(pipeline_lab, "MODULO_PIPELINE_LAB_ACTIVO", False)
+    else ("error" if _err_pipeline else "off")
+)
 st.caption(
     f"Build **{APP_BUILD}** | Enlace: **{canal}** | Caché APIs: **{intervalo}** | "
-    f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}**"
+    f"MUNDO LAB: **{getattr(mundo_lab, 'MUNDO_LAB_VERSION', 'no cargado')}** | "
+    f"PIPELINE LAB: **{_ver_pl_header}**"
 )
 if not mundo_lab or not mapa_tect or not informes_pdf:
     st.warning(
@@ -1710,9 +1830,19 @@ _tab_labels = [
     "EVIDENCIA Y VALIDACIÓN",
 ]
 _tab_labels.append("MUNDO (LAB)")
+_pipeline_activo = bool(
+    pipeline_lab and getattr(pipeline_lab, "MODULO_PIPELINE_LAB_ACTIVO", False)
+)
+if _pipeline_activo:
+    _tab_labels.append("PIPELINE (LAB)")
+elif _err_pipeline and admin_activo:
+    _tab_labels.append("PIPELINE (LAB)")
 _tabs = st.tabs(_tab_labels)
 tab_vivo, tab_hist, tab_cal, tab_calidad, tab_suscripcion, tab_evidencia = _tabs[:6]
-tab_mundo = _tabs[6] if len(_tabs) > 6 else None
+_idx_extra = 6
+tab_mundo = _tabs[_idx_extra] if len(_tabs) > _idx_extra else None
+_idx_extra += 1 if tab_mundo is not None else 0
+tab_pipeline = _tabs[_idx_extra] if len(_tabs) > _idx_extra else None
 
 with tab_vivo:
     if modo_demo and admin_activo:
@@ -1799,6 +1929,8 @@ with tab_vivo:
     c9, c10 = st.columns(2)
     c9.metric("EM (Z-score)", f"{cond} mS/m")
     c10.metric("SHOA", f"{shoa} cm")
+
+    render_probabilidades_escaneo_vivo(estacion_sel, df_sismos_local)
 
     col_mapa, col_tabla = st.columns([1.8, 1.2])
     with col_mapa:
@@ -2135,6 +2267,31 @@ if tab_mundo is not None:
             admin_activo, ttl_seg, ttl_horas, nodo_mundo_sel,
             forzar_mundo, modo_sat, modo_demo, kp,
         )
+
+if tab_pipeline is not None:
+    with tab_pipeline:
+        if pipeline_lab:
+            pipeline_lab.render_pipeline_lab(
+                admin_activo=admin_activo,
+                estacion_sel=estacion_sel,
+                config=config,
+                ctx_principal={
+                    "nivel": nivel_alerta.get("nivel"),
+                    "color": nivel_alerta.get("color"),
+                    "puntaje": puntaje,
+                    "b_val": b_val,
+                    "mejor_match": mejor_match,
+                    "total_sismos": total_sismos,
+                    "tendencia_dir": "—",
+                },
+                df_sismos_local=df_sismos_local,
+            )
+        else:
+            st.error(f"No se pudo cargar nazca_pipeline_lab.py: {_err_pipeline}")
+            st.caption(
+                "Verifica en GitHub: nazca_pipeline_lab.py, nazca_catalogo_db.py, "
+                "nazca_pipeline_ml.py y scikit-learn en requirements.txt."
+            )
 
 st.sidebar.metric("Próxima API", f"≤ {ttl_horas} h")
 st.sidebar.metric("b-value regional", f"{b_val}")
